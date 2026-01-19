@@ -1,11 +1,9 @@
 import requests
 
-API_URL = "https://api.ambient.xyz/v1/chat/completions"
-API_KEY = "api"
 
-def get_verified_proof():
+def get_verified_proof(api_url: str, api_key: str) -> None:
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -18,11 +16,9 @@ def get_verified_proof():
     }
 
     try:
-        response = requests.post(API_URL, headers=headers, json=payload)
+        response = requests.post(api_url, headers=headers, json=payload)
         data = response.json()
-        merkle = data.get('merkle_root')
+        merkle = data.get("merkle_root")
         print(f"Response received. Merkle Root: {merkle}")
     except Exception as e:
         print(f"Error: {e}")
-if __name__ == "__main__":
-    get_verified_proof()
