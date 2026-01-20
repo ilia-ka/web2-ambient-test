@@ -1,0 +1,37 @@
+Act as a Senior Backend Engineer and Performance Specialist. I am participating in a "Web2 Developer Loop" challenge and need a robust, production-grade solution.
+
+Here is the challenge context:
+---
+Challenge: “Stream a response end-to-end.”
+Task: Implement streaming responses.
+Measure: Time to first token (TTFT) and Time to completion (TTC).
+Deliverable: Code snippet and Short latency notes for a Discord post.
+Stretch goal: Run the same prompt against a closed API (OpenAI) and compare streaming behavior + latency.
+---
+
+Please execute the following steps to complete this task:
+
+### Step 1: The Implementation (Server & Stream)
+Write a backend code snippet using **[INSERT YOUR STACK HERE, e.g., Node.js/Express, Python/FastAPI, Go]**.
+- Create an API endpoint (e.g., `/stream`) that simulates a streaming response (e.g., sends chunks of text with a slight delay to mimic LLM generation).
+- Ensure headers are set correctly for streaming (e.g., `Transfer-Encoding: chunked` or `Content-Type: text/event-stream`).
+
+### Step 2: The Benchmarking Script
+Write a client-side script (in the same language or curl/bash) that connects to this endpoint and precisely measures:
+1. **TTFT (Time to First Token):** The duration from the request start to the arrival of the first chunk of data.
+2. **TTC (Time to Completion):** The duration from the request start to the closing of the connection.
+
+### Step 3: The Stretch Goal (Closed API Comparison)
+Extend the benchmarking script to perform the same measurements against the **OpenAI API** (using a standard streaming completion request).
+- *Note: Assume I will provide the API Key via environment variables.*
+- Compare the "Simulated Local Stream" vs. "OpenAI Stream" in terms of jitter and latency.
+
+### Step 4: The Deliverable Artifact
+Generate a concise, formatted summary ready to be copy-pasted into a Discord channel (`#developers`). It must include:
+1. The core code snippet (use markdown code blocks).
+2. A "Latency Notes" section comparing your local implementation vs. the external API.
+3. A brief explanation of the "Streaming Behavior" observed (e.g., burstiness vs. smooth flow).
+
+**Constraints:**
+- Keep the code clean and readable.
+- Add comments explaining *how* the streaming is achieved technically.
