@@ -1,15 +1,26 @@
 import json
+import sys
 import time
 from typing import Optional, Tuple
 
 import requests
 
 
+def _safe_write(text: str) -> None:
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        sys.stdout.buffer.write(text.encode(encoding, errors="replace"))
+        sys.stdout.flush()
+
+
 def stream_chat(
     api_url: str,
     api_key: str,
     prompt: str,
-    model: str = "large",
+    model: str = "zai-org/GLM-4.6",
 ) -> Optional[Tuple[str, float, float]]:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -65,7 +76,7 @@ def stream_chat(
                 if first_token_at is None:
                     first_token_at = time.perf_counter()
                 chunks.append(content)
-                print(content, end="", flush=True)
+                _safe_write(content)
     except requests.RequestException as exc:
         print(f"Error: {exc}")
         return None
@@ -73,5 +84,5 @@ def stream_chat(
     end = time.perf_counter()
     if first_token_at is None:
         first_token_at = end
-    print()
+    _safe_write("\n")
     return "".join(chunks), first_token_at - start, end - start
