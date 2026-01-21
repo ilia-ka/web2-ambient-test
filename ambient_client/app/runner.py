@@ -1,8 +1,8 @@
-import os
 from typing import Tuple
 
-from ..config import get_config
+from ..config import load_env_file
 from ..streaming import stream_chat
+from .ambient import get_ambient_settings
 from .openai import get_openai_settings
 from .openrouter import get_openrouter_settings
 from .prompt import load_prompt
@@ -50,25 +50,17 @@ def _run_provider(settings: ProviderSettings, prompt: str, had_output: bool) -> 
 
 
 def run() -> None:
-    config = get_config()
-    if not config:
-        return
-    ambient_enabled, api_url, api_key = config
+    load_env_file()
     prompt = load_prompt()
     if prompt is None:
         return
-    model = os.getenv("AMBIENT_MODEL", "zai-org/GLM-4.6")
 
     had_output = False
-    if ambient_enabled:
-        if not _run_stream("Ambient", api_url, api_key, prompt, model):
+    for settings in (
+        get_ambient_settings(),
+        get_openai_settings(),
+        get_openrouter_settings(),
+    ):
+        success, had_output = _run_provider(settings, prompt, had_output)
+        if not success:
             return
-        had_output = True
-
-    success, had_output = _run_provider(get_openai_settings(), prompt, had_output)
-    if not success:
-        return
-
-    success, had_output = _run_provider(get_openrouter_settings(), prompt, had_output)
-    if not success:
-        return

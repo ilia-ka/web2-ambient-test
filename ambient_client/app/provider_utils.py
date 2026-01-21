@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import os
 import re
-from typing import List
+from typing import List, Optional
 
 from ..utils import is_enabled
 
@@ -77,9 +77,12 @@ def get_provider_settings(
     models_env: str,
     model_env: str,
     default_model: str,
+    default_enabled: Optional[bool] = None,
 ) -> ProviderSettings:
     api_key = _first_env_value(api_key_envs)
-    enabled = is_enabled(os.getenv(enabled_env), default=bool(api_key))
+    if default_enabled is None:
+        default_enabled = bool(api_key)
+    enabled = is_enabled(os.getenv(enabled_env), default=default_enabled)
     api_url = build_chat_completions_url(
         os.getenv(api_url_env, ""),
         os.getenv(base_url_env, ""),
