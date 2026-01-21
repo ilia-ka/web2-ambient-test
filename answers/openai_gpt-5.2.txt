@@ -1,0 +1,341 @@
+## 1) High-level system design (textual overview)
+
+### Core goals
+A global video streaming platform must optimize for:
+- **Low-latency playback worldwide** (fast startup time, minimal buffering)
+- **Elastic scalability** (traffic spikes, new releases)
+- **High availability** (multi-region, fault isolation)
+- **Personalization at scale** (recommendations, continue-watching)
+- **Strong data consistency where needed** (billing, entitlements) and eventual consistency elsewhere (views, metrics)
+
+### High-level architecture (microservices + multi-region)
+**Client Apps (TV/Mobile/Web)**
+- Use **HTTPS** for APIs and **HLS/DASH** for video streaming.
+- Device capabilities and DRM requirements are sent to backend to select appropriate manifests.
+
+**Edge Layer**
+- **Global DNS + Anycast + CDN** routes users to the nearest edge POP.
+- CDN caches video segments, manifests, subtitles, artwork; edge supports token validation and geo restrictions where possible.
+
+**API Gateway + Edge Auth**
+- Central entrypoint for API calls: request routing, auth verification, rate limiting, WAF, request shaping.
+- Routes to internal services via service mesh.
+
+**Key backend microservices (examples)**
+- **Identity/Auth Service**: login, token issuance (OAuth2/OIDC), session management.
+- **Profile Service**: multiple profiles per account; maturity settings; UI preferences.
+- **Catalog Service**: titles, seasons, episodes, availability windows, localization metadata.
+- **Playback Service**: entitlement checks, DRM license orchestration, manifest generation, CDN token signing.
+- **Continue Watching / Viewing History Service**: progress events ingestion and query.
+- **Recommendations Service**: personalized ranking and rows; uses offline + nearline features.
+- **Search Service**: full-text search, autocomplete, synonyms, multilingual support.
+- **Billing/Subscriptions Service**: plans, payments, invoices; strong consistency.
+- **Content Ingestion + Transcoding Pipeline**: ingest masters, encode ladders, package HLS/DASH, generate thumbnails/subtitles, publish to origin storage.
+- **Observability/Telemetry Service**: player QoE metrics, logs, traces, anomaly detection.
+
+**Data & eventing backbone**
+- Services own their data (database-per-service). Cross-service communication is:
+  - **Synchronous** for user-facing reads/writes requiring immediate response (gRPC/HTTP).
+  - **Asynchronous** for fanout, analytics, cache invalidations, and pipeline orchestration (Kafka topics).
+- Use **CQRS** where needed: write models optimized for correctness, read models optimized for latency.
+
+**Multi-region strategy**
+- Run active-active in multiple regions for stateless services.
+- Use **geo-routing** to nearest region; fail over via health-based routing.
+- Data:
+  - Global read-heavy datasets (catalog) replicated widely.
+  - User state (profiles/history) sharded and replicated with region affinity.
+  - Strongly consistent domains (billing) may be region-pinned with disaster recovery or use globally consistent stores depending on constraints.
+
+---
+
+## 2) Five key technologies (and why)
+
+- **Kubernetes (EKS/GKE/AKS)**
+  - Standardized deployment, autoscaling, service discovery, blue/green or canary releases, and strong operational tooling for microservices.
+
+- **Apache Kafka**
+  - High-throughput event streaming for viewing events, pipeline orchestration, cache invalidations, audit logs, and near-real-time feature generation.
+
+- **Cassandra (or DynamoDB in managed setups)**
+  - Horizontally scalable, high-write throughput, tunable consistency, and multi-region replication patterns suitable for user state and time-series-like events.
+
+- **Redis (clustered)**
+  - Ultra-low-latency caching for sessions, tokens, profile lookups, playback authorization decisions, and hot catalog metadata.
+
+- **Service Mesh (Istio/Linkerd + Envoy)**
+  - mTLS between services, retries/timeouts/circuit breaking, traffic splitting for safe rollouts, and uniform observability without per-service reinvention.
+
+---
+
+## 3. Python sharding algorithm (>= 50 lines, heavily commented)
+
+```python
+"""
+Consistent-hashing sharding with:
+- Virtual nodes (vnodes) for smoother distribution
+- Weighted shards (bigger nodes get more vnodes)
+- Replication factor (RF) for high availability
+- Deterministic mapping from key -> (primary + replicas)
+
+This is a simplified demonstration that you can embed into a router library
+used by services to decide which shard(s) to read/write for a given partition key.
+"""
+
+from __future__ import annotations
+
+import bisect
+import hashlib
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Iterable, Set
+
+
+def _hash_to_u64(value: str) -> int:
+    """
+    Hash a string to an unsigned 64-bit integer.
+    We use SHA-256 for stable cross-language behavior (not Python's hash()).
+    """
+    digest = hashlib.sha256(value.encode("utf-8")).digest()
+    # Take first 8 bytes => 64-bit ring space.
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+
+
+@dataclass(frozen=True)
+class Shard:
+    """
+    Represents a physical shard (e.g., a Cassandra node group, DB cluster, etc.).
+    `weight` allows larger shards to own more of the hash ring.
+    """
+    shard_id: str
+    weight: int = 1
+    # You could include connection info, region, rack, etc.
+
+
+class ConsistentHashRing:
+    """
+    A consistent hash ring with virtual nodes.
+    - Each physical shard gets N * weight virtual positions on the ring.
+    - Mapping a key: hash(key) -> first vnode clockwise.
+    """
+
+    def __init__(self, shards: Iterable[Shard], vnodes_per_weight: int = 128):
+        self.vnodes_per_weight = vnodes_per_weight
+
+        # Sorted list of (position, shard_id) tuples for efficient clockwise lookup.
+        self._ring: List[Tuple[int, str]] = []
+
+        # Track shards for validation and metadata
+        self._shards: Dict[str, Shard] = {}
+
+        for shard in shards:
+            self.add_shard(shard)
+
+        # Ensure ring is sorted by position for binary search.
+        self._ring.sort(key=lambda x: x[0])
+
+    def add_shard(self, shard: Shard) -> None:
+        """
+        Add a shard by placing its virtual nodes onto the ring.
+        In production, you'd likely coordinate this via a control plane to avoid split-brain.
+        """
+        if shard.shard_id in self._shards:
+            raise ValueError(f"Shard already exists: {shard.shard_id}")
+
+        self._shards[shard.shard_id] = shard
+
+        vnode_count = self.vnodes_per_weight * max(1, shard.weight)
+
+        # Each vnode gets a deterministic ring position derived from shard_id + vnode_index.
+        for i in range(vnode_count):
+            pos = _hash_to_u64(f"{shard.shard_id}::vnode::{i}")
+            self._ring.append((pos, shard.shard_id))
+
+    def remove_shard(self, shard_id: str) -> None:
+        """
+        Remove shard and its virtual nodes.
+        This triggers key remapping for only the ranges owned by this shard (consistent hashing property).
+        """
+        if shard_id not in self._shards:
+            return
+
+        del self._shards[shard_id]
+        self._ring = [(pos, sid) for (pos, sid) in self._ring if sid != shard_id]
+        self._ring.sort(key=lambda x: x[0])
+
+    def _clockwise_shard(self, h: int) -> str:
+        """
+        Find the shard owning hash position h by selecting the first vnode clockwise.
+        Wrap-around to index 0 if we pass the end of the ring.
+        """
+        if not self._ring:
+            raise RuntimeError("No shards in ring")
+
+        positions = [p for (p, _) in self._ring]
+        idx = bisect.bisect_left(positions, h)
+
+        # Wrap-around: if h is beyond the last vnode position, go to first vnode.
+        if idx == len(self._ring):
+            idx = 0
+
+        return self._ring[idx][1]
+
+    def locate(self, key: str, replication_factor: int = 3) -> List[str]:
+        """
+        Return an ordered list of shard_ids:
+        - First is primary
+        - Remaining are replicas (unique shard_ids)
+
+        Replicas are chosen by walking clockwise and selecting the next distinct physical shard.
+        This is a common approach; production systems also consider rack/zone awareness.
+        """
+        if replication_factor < 1:
+            raise ValueError("replication_factor must be >= 1")
+
+        if not self._ring:
+            raise RuntimeError("No shards in ring")
+
+        # Hash the key into ring space.
+        h = _hash_to_u64(key)
+
+        # Start from primary.
+        primary = self._clockwise_shard(h)
+        chosen: List[str] = [primary]
+        chosen_set: Set[str] = {primary}
+
+        # Walk clockwise through vnodes to find next unique shards.
+        # Note: we walk indices rather than re-hashing to preserve determinism.
+        positions = [p for (p, _) in self._ring]
+        start_idx = bisect.bisect_left(positions, h)
+        if start_idx == len(self._ring):
+            start_idx = 0
+
+        i = start_idx
+        while len(chosen) < min(replication_factor, len(self._shards)):
+            i = (i + 1) % len(self._ring)
+            sid = self._ring[i][1]
+            if sid not in chosen_set:
+                chosen.append(sid)
+                chosen_set.add(sid)
+
+            # Safety: if ring is extremely small, prevent infinite loops.
+            if len(chosen_set) == len(self._shards):
+                break
+
+        return chosen
+
+    def debug_distribution(self, sample_keys: Iterable[str]) -> Dict[str, int]:
+        """
+        Utility to estimate distribution across shards for a set of keys.
+        Useful when evaluating vnode counts and weights.
+        """
+        counts: Dict[str, int] = {sid: 0 for sid in self._shards.keys()}
+        for k in sample_keys:
+            sid = self.locate(k, replication_factor=1)[0]
+            counts[sid] += 1
+        return counts
+
+
+if __name__ == "__main__":
+    # Example usage:
+    ring = ConsistentHashRing(
+        shards=[
+            Shard("shard-a", weight=2),  # larger shard
+            Shard("shard-b", weight=1),
+            Shard("shard-c", weight=1),
+        ],
+        vnodes_per_weight=64
+    )
+
+    # Locate shards for a user partition key (e.g., account_id or profile_id).
+    key = "account:123456"
+    print("Primary + replicas:", ring.locate(key, replication_factor=3))
+
+    # Evaluate rough distribution.
+    keys = [f"user:{i}" for i in range(10000)]
+    print("Distribution:", ring.debug_distribution(keys))
+```
+
+---
+
+## 4) JSON Schema example for a user profile object
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/user-profile.json",
+  "title": "UserProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profileId", "accountId", "displayName", "language", "maturityLevel", "createdAt", "updatedAt"],
+  "properties": {
+    "profileId": {
+      "type": "string",
+      "description": "Globally unique profile identifier (UUID/ULID).",
+      "pattern": "^[A-Za-z0-9_-]{16,64}$"
+    },
+    "accountId": {
+      "type": "string",
+      "description": "Owning account identifier.",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "avatarId": {
+      "type": "string",
+      "description": "Reference to an avatar asset.",
+      "maxLength": 64
+    },
+    "language": {
+      "type": "string",
+      "description": "BCP-47 language tag.",
+      "pattern": "^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$"
+    },
+    "country": {
+      "type": "string",
+      "description": "ISO 3166-1 alpha-2 country code.",
+      "pattern": "^[A-Z]{2}$"
+    },
+    "maturityLevel": {
+      "type": "string",
+      "description": "Controls content eligibility.",
+      "enum": ["KIDS", "TEEN", "ADULT"]
+    },
+    "isKidsProfile": {
+      "type": "boolean",
+      "default": false
+    },
+    "playback": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autoplayNext": { "type": "boolean", "default": true },
+        "autoplayPreviews": { "type": "boolean", "default": true },
+        "maxResolution": { "type": "string", "enum": ["SD", "HD", "UHD"], "default": "UHD" }
+      }
+    },
+    "accessibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "captionsEnabled": { "type": "boolean", "default": false },
+        "captionsLanguage": {
+          "type": "string",
+          "pattern": "^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$"
+        },
+        "audioDescriptionEnabled": { "type": "boolean", "default": false }
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
+```

@@ -1,0 +1,880 @@
+# Scalable Microservices Architecture for a Global Video Streaming Platform
+
+## 1. High-Level System Overview
+
+A global video streaming platform like Netflix requires a highly scalable, resilient, and distributed architecture to serve millions of concurrent users worldwide. The proposed microservices architecture follows Domain-Driven Design principles, with each service owning its specific data and business logic.
+
+### Core Microservices
+
+1. **User Management Service**
+   - Handles registration, authentication, authorization
+   - Manages user profiles and preferences
+   - OAuth integration with social platforms
+   - Implements JWT-based authentication
+
+2. **Content Catalog Service**
+   - Manages metadata (titles, descriptions, genres, ratings)
+   - Maintains content availability by region
+   - Handles content lifecycle management
+   - Stores rich media metadata (thumbnails, trailers)
+
+3. **Video Processing Service**
+   - Handles video uploads from content providers
+   - Transcodes videos to multiple resolutions and formats
+   - Applies DRM protection
+   - Generates thumbnails and previews
+
+4. **Video Delivery Service**
+   - Manages streaming protocol negotiation (HLS, DASH)
+   - Implements adaptive bitrate streaming
+   - Integrates with global Content Delivery Networks
+   - Handles CDN cache invalidation
+
+5. **Search and Recommendation Service**
+   - Provides full-text search capabilities
+   - Generates personalized recommendations
+   - Trending content analysis
+   - Content similarity and discovery features
+
+6. **Viewing History Service**
+   - Tracks watch history and progress
+   - Enables cross-device watch synchronization
+   - Powers recommendation algorithms
+   - Provides viewing analytics
+
+7. **Billing and Subscription Service**
+   - Manages subscription tiers and plans
+   - Handles payment processing and renewals
+   - Manages free trials and promotions
+   - Generates invoices and receipts
+
+8. **Analytics Service**
+   - Collects viewing metrics and user behavior
+   - Provides business intelligence dashboards
+   - Monitors service performance metrics
+   - Reports content popularity and engagement
+
+### Infrastructure Layer
+
+1. **API Gateway**
+   - Single point of entry for all client requests
+   - Request routing to appropriate services
+   - Rate limiting and throttling
+   - Response aggregation
+   - Authentication and security enforcement
+
+2. **Communication Layer**
+   - Asynchronous messaging for decoupling services
+   - Event-driven architecture for workflow coordination
+   - Message queues for load leveling
+   - Event sourcing for audit trails
+
+3. **Data Layer**
+   - Polyglot persistence based on data needs
+   - Relational databases for transactional data
+   - Document stores for flexible metadata
+   - Time-series databases for analytics
+   - Graph databases for recommendations
+   - Distributed caching for performance
+
+4. **Content Delivery Network (CDN)**
+   - Global distribution of video content
+   - Edge caching for reduced latency
+   - DDoS protection
+   - Geographic access optimization
+
+### Key Architectural Patterns
+
+1. **Event-Driven Architecture**
+   - Services communicate through events
+   - Loose coupling between services
+   - Asynchronous processing for non-blocking operations
+   - Event replay for system recovery
+
+2. **CQRS (Command Query Responsibility Segregation)**
+   - Separate read and write models
+   - Optimized for different access patterns
+   - Enhanced performance for read-heavy operations
+
+3. **Strangler Fig Pattern**
+   - Incremental migration from monolithic to microservices
+   - Gradual replacement of legacy components
+   - Continuous operational capability during migration
+
+4. **Bulkhead Pattern**
+   - Isolation of resources for different services
+   - Failure containment to prevent cascading issues
+   - Resilience through resource partitioning
+
+5. **Circuit Breaker Pattern**
+   - Graceful degradation during service failures
+   - Automated recovery detection
+   - Fallback mechanisms for critical operations
+
+## 2. Key Technologies and Rationale
+
+- **Kubernetes**: Container orchestration platform that automates deployment, scaling, and management of containerized applications. It provides declarative configuration, self-healing capabilities, and horizontal scalability, which are essential for managing hundreds of microservices with varying loads.
+
+- **Apache Kafka**: Distributed streaming platform that serves as the backbone of the event-driven architecture. It handles trillions of events per day from user interactions, providing persistent storage, fault tolerance, and real-time processing capabilities that are critical for a streaming platform's analytics and recommendation systems.
+
+- **Amazon S3**: Object storage service that provides virtually unlimited scalability with 99.999999999% durability. It's ideal for storing video files at various resolutions and formats, with lifecycle policies to manage storage costs while ensuring content is always available globally.
+
+- **MongoDB with Sharding**: Document database that offers flexible schema for varied content metadata, combined with horizontal scaling capabilities through sharding. Its document model maps naturally to video metadata, while its distributed architecture allows the platform to scale its content catalogs without downtime.
+
+- **Arista Networks & Cloudflare CDN**: Combined solution for high-performance content delivery. Arista provides the networking backbone with ultra-low latency and high throughput, while Cloudflare's global CDN ensures video content is cached close to users worldwide, reducing latency by over 70% and providing a seamless streaming experience.
+
+## 3. Database Sharding Algorithm Implementation
+
+```python
+import hashlib
+from bisect import bisect, bisect_left, insort
+from collections import defaultdict
+from typing import Dict, List, Tuple, Any, Optional
+
+class ConsistentHashRing:
+    """
+    Consistent Hashing implementation for database sharding in a video streaming platform.
+    
+    This algorithm minimizes data movement when adding/removing nodes and ensures
+    uniform distribution of keys across shards.
+    """
+    
+    def __init__(self, replicas=100):
+        """
+        Initialize the consistent hash ring.
+        
+        Args:
+            replicas (int): Number of virtual replicas per physical shard.
+                           Higher values lead to more even key distribution.
+        """
+        self.replicas = replicas
+        self.ring = {}  # Maps hash positions to shard identifiers
+        self.sorted_keys = []  # Sorted hash positions for binary search
+        self.shard_metadata = {}  # Stores additional metadata for each shard
+        
+    def _hash(self, key: str) -> int:
+        """
+        Generate a hash value for the given key using SHA-256 for better distribution.
+        
+        Args:
+            key (str): The key to hash
+            
+        Returns:
+            int: The hash value as an integer
+        """
+        return int(hashlib.sha256(key.encode('utf-8')).hexdigest(), 16)
+    
+    def add_shard(self, shard_id: str, metadata: Optional[Dict] = None) -> None:
+        """
+        Add a new shard to the consistent hash ring.
+        
+        Args:
+            shard_id (str): Unique identifier for the shard
+            metadata (Dict): Additional metadata about the shard (host, port, weight, etc.)
+        """
+        if shard_id in self.shard_metadata:
+            raise ValueError(f"Shard {shard_id} already exists in the ring")
+            
+        self.shard_metadata[shard_id] = metadata or {}
+        
+        # Create virtual replica points for better distribution
+        # Using a weight-based approach where higher-capacity shards get more replicas
+        weight = metadata.get('weight', 1.0) if metadata else 1.0
+        num_replicas = max(1, int(self.replicas * weight))
+        
+        for i in range(num_replicas):
+            virtual_key = f"{shard_id}:replica:{i}"
+            hash_value = self._hash(virtual_key)
+            self.ring[hash_value] = shard_id
+            
+            # Insert into sorted keys to maintain order
+            insort(self.sorted_keys, hash_value)
+    
+    def remove_shard(self, shard_id: str) -> Dict:
+        """
+        Remove a shard from the consistent hash ring.
+        
+        Args:
+            shard_id (str): The shard ID to remove
+            
+        Returns:
+            Dict: Metadata from the removed shard
+        """
+        if shard_id not in self.shard_metadata:
+            raise ValueError(f"Shard {shard_id} not found in the ring")
+            
+        metadata = self.shard_metadata.pop(shard_id)
+        
+        # Remove all virtual nodes for this shard
+        keys_to_remove = []
+        for hash_value, sid in self.ring.items():
+            if sid == shard_id:
+                keys_to_remove.append(hash_value)
+        
+        for key in keys_to_remove:
+            del self.ring[key]
+            self.sorted_keys.remove(key)
+            
+        return metadata
+    
+    def get_shard(self, key: str) -> Tuple[str, Dict]:
+        """
+        Get the shard responsible for storing data with the given key.
+        
+        Args:
+            key (str): The data key
+            
+        Returns:
+            Tuple[str, Dict]: (shard_id, shard_metadata)
+        """
+        if not self.ring:
+            raise ValueError("No shards available in the hash ring")
+            
+        # Calculate hash for the key
+        hash_value = self._hash(key)
+        
+        # Find the first hash position >= our key hash
+        idx = bisect_left(self.sorted_keys, hash_value)
+        
+        # If we've reached the end of the ring, wrap around
+        if idx == len(self.sorted_keys):
+            idx = 0
+            
+        # Get the shard at this position
+        shard_hash = self.sorted_keys[idx]
+        shard_id = self.ring[shard_hash]
+        
+        return shard_id, self.shard_metadata.get(shard_id, {})
+    
+    def get_all_shards(self) -> List[str]:
+        """
+        Get a list of all shard IDs in the ring.
+        
+        Returns:
+            List[str]: List of all shard IDs
+        """
+        return list(self.shard_metadata.keys())
+    
+    def analyze_data_distribution(self, sample_keys: List[str]) -> Dict[str, int]:
+        """
+        Analyze how keys would be distributed across shards.
+        
+        Args:
+            sample_keys (List[str]): Sample keys to analyze
+            
+        Returns:
+            Dict[str, int]: Distribution count per shard
+        """
+        distribution = defaultdict(int)
+        
+        for key in sample_keys:
+            shard_id, _ = self.get_shard(key)
+            distribution[shard_id] += 1
+                
+        return distribution
+
+
+class VideoShardingStrategy:
+    """
+    Implements sharding strategy for video content in a streaming platform.
+    
+    This class provides specialized methods for sharding video-related data
+    based on different sharding keys (video_id, title, upload_date, etc.).
+    """
+    
+    def __init__(self, shard_configs: List[Dict]):
+        """
+        Initialize the video sharding strategy.
+        
+        Args:
+            shard_configs (List[Dict]): List of configuration objects for video shards
+        """
+        self.hash_ring = ConsistentHashRing(replicas=150)
+        
+        # Add all shards to the hash ring
+        for config in shard_configs:
+            self.add_shard(config)
+    
+    def add_shard(self, shard_config: Dict) -> None:
+        """
+        Add a new video shard to the system.
+        
+        Args:
+            shard_config (Dict): Shard configuration including id, weight, host, etc.
+        """
+        if 'id' not in shard_config:
+            raise ValueError("Shard configuration must include 'id'")
+            
+        self.hash_ring.add_shard(
+            shard_id=shard_config['id'],
+            metadata=shard_config
+        )
+    
+    def get_video_shard(self, video_id: str) -> Dict:
+        """
+        Get the shard that should store metadata for a specific video.
+        
+        Args:
+            video_id (str): The video identifier
+            
+        Returns:
+            Dict: Shard configuration
+        """
+        shard_id, shard_config = self.hash_ring.get_shard(f"video:{video_id}")
+        return shard_config
+    
+    def get_user_view_history_shard(self, user_id: str) -> Dict:
+        """
+        Get the shard responsible for a user's viewing history.
+        
+        Args:
+            user_id (str): The user identifier
+            
+        Returns:
+            Dict: Shard configuration
+        """
+        shard_id, shard_config = self.hash_ring.get_shard(f"history:{user_id}")
+        return shard_config
+    
+    def get_analytics_shard(self, date: str) -> Dict:
+        """
+        Get the shard for analytics data for a specific date.
+        
+        Args:
+            date (str): Date in YYYY-MM-DD format
+            
+        Returns:
+            Dict: Shard configuration
+        """
+        shard_id, shard_config = self.hash_ring.get_shard(f"analytics:{date}")
+        return shard_config
+    
+    def plan_data_migration(self, old_shard: str, new_shard_config: Dict) -> Dict[str, List[str]]:
+        """
+        Plan migration of data when adding a new shard.
+        
+        Args:
+            old_shard (str): Existing shard that will give up some data
+            new_shard_config (Dict): Configuration for the new shard
+            
+        Returns:
+            Dict[str, List[str]]: Keys to be moved from each shard
+        """
+        # Add the new shard to the ring
+        self.add_shard(new_shard_config)
+        
+        migration_plan = defaultdict(list)
+        
+        # Identify keys that would now map to different shards
+        # In a real implementation with billions of keys, this would be done via
+        # a distributed job that processes keys in batches
+        
+        return migration_plan
+
+
+# Example usage and testing
+if __name__ == "__main__":
+    # Define database shard configurations
+    shard_configs = [
+        {
+            "id": "video_shard_1",
+            "host": "db1.streaming-platform.com",
+            "port": 27017,
+            "region": "us-east-1",
+            "weight": 1.5,  # Higher capacity
+            "max_connections": 200
+        },
+        {
+            "id": "video_shard_2",
+            "host": "db2.streaming-platform.com",
+            "port": 27017,
+            "region": "us-west-1",
+            "weight": 1.0,
+            "max_connections": 150
+        },
+        {
+            "id": "video_shard_3",
+            "host": "db3.streaming-platform.com",
+            "port": 27017,
+            "region": "eu-west-1",
+            "weight": 1.2,
+            "max_connections": 175
+        },
+    ]
+    
+    # Initialize the sharding strategy
+    sharding = VideoShardingStrategy(shard_configs)
+    
+    # Test sharding distribution with sample video IDs
+    sample_videos = [f"video-{i:06d}" for i in range(10000)]
+    
+    distribution = sharding.hash_ring.analyze_data_distribution(sample_videos)
+    
+    print("Video distribution across shards:")
+    for shard_id, count in distribution.items():
+        percentage = count / len(sample_videos) * 100
+        print(f"{shard_id}: {count} videos ({percentage:.1f}%)")
+    
+    # Test specific video routing
+    test_video_id = "video-movie-12345-abcde"
+    target_shard = sharding.get_video_shard(test_video_id)
+    print(f"\nVideo {test_video_id} should be stored in shard {target_shard['id']} at {target_shard['host']}")
+    
+    # Test adding a new shard
+    new_shard_config = {
+        "id": "video_shard_4",
+        "host": "db4.streaming-platform.com",
+        "port": 27017,
+        "region": "ap-southeast-1",
+        "weight": 1.0,
+        "max_connections": 150
+    }
+    
+    print(f"\nAdding new shard {new_shard_config['id']}...")
+    sharding.add_shard(new_shard_config)
+    
+    # Check how distribution changes
+    new_distribution = sharding.hash_ring.analyze_data_distribution(sample_videos)
+    
+    print("\nNew video distribution after adding shard:")
+    for shard_id, count in new_distribution.items():
+        percentage = count / len(sample_videos) * 100
+        print(f"{shard_id}: {count} videos ({percentage:.1f}%)")
+```
+
+## 4. User Profile JSON Schema
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "User Profile",
+  "description": "Schema for a user profile in a global video streaming platform",
+  "type": "object",
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "description": "Globally unique identifier for the user",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "username": {
+      "type": "string",
+      "description": "User's chosen display name",
+      "minLength": 3,
+      "maxLength": 30,
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "email": {
+      "type": "string",
+      "description": "User's email address",
+      "format": "email"
+    },
+    "personal_info": {
+      "type": "object",
+      "description": "User's personal information",
+      "properties": {
+        "first_name": {
+          "type": "string",
+          "description": "User's first name",
+          "maxLength": 50
+        },
+        "last_name": {
+          "type": "string",
+          "description": "User's last name",
+          "maxLength": 50
+        },
+        "date_of_birth": {
+          "type": "string",
+          "description": "User's date of birth for age verification",
+          "format": "date"
+        },
+        "country": {
+          "type": "string",
+          "description": "User's country of residence",
+          "pattern": "^[A-Z]{2}$",
+          "minLength": 2,
+          "maxLength": 2
+        }
+      },
+      "required": ["country"]
+    },
+    "avatar": {
+      "type": "object",
+      "description": "User's avatar information",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL to the user's avatar image",
+          "format": "uri",
+          "maxLength": 500
+        },
+        "image_id": {
+          "type": "string",
+          "description": "Unique identifier for the avatar image"
+        },
+        "is_default": {
+          "type": "boolean",
+          "description": "Whether this is a default avatar",
+          "default": true
+        }
+      }
+    },
+    "subscription": {
+      "type": "object",
+      "description": "User's subscription information",
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": ["basic", "standard", "premium", "ultra"],
+          "description": "Subscription tier that determines content access"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "canceled", "expired", "pending", "suspended"],
+          "description": "Current status of the subscription"
+        },
+        "auto_renew": {
+          "type": "boolean",
+          "description": "Whether the subscription will automatically renew",
+          "default": true
+        },
+        "start_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the subscription started"
+        },
+        "end_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the current subscription period ends"
+        },
+        "next_billing_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the next payment will be processed"
+        },
+        "payment_method": {
+          "type": "object",
+          "description": "Payment method details",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["credit_card", "paypal", "apple_pay", "google_pay", "gift_card"],
+              "description": "Payment method type"
+            },
+            "last_four": {
+              "type": "string",
+              "description": "Last four digits of the payment method (if applicable)",
+              "pattern": "^[0-9]{4}$"
+            },
+            "brand": {
+              "type": "string",
+              "enum": ["visa", "mastercard", "amex", "discover"],
+              "description": "Payment card brand"
+            },
+            "expiry": {
+              "type": "string",
+              "pattern": "^([0-9]{2})/([0-9]{2})$",
+              "description": "Card expiry in MM/YY format"
+            },
+            "is_default": {
+              "type": "boolean",
+              "description": "Whether this is the default payment method",
+              "default": true
+            }
+          },
+          "required": ["type"]
+        }
+      },
+      "required": ["tier", "status", "auto_renew"]
+    },
+    "preferences": {
+      "type": "object",
+      "description": "User's viewing preferences and settings",
+      "properties": {
+        "language": {
+          "type": "string",
+          "description": "Preferred interface language (ISO 639-1 code)",
+          "default": "en",
+          "pattern": "^[a-z]{2}$"
+        },
+        "subtitle_language": {
+          "type": "string",
+          "description": "Preferred subtitle language",
+          "default": "en",
+          "pattern": "^[a-z]{2}$"
+        },
+        "audio_language": {
+          "type": "string",
+          "description": "Preferred audio language",
+          "default": "en",
+          "pattern": "^[a-z]{2}$"
+        },
+        "video_quality": {
+          "type": "string",
+          "enum": ["auto", "low", "medium", "high", "ultra"],
+          "description": "Preferred video quality",
+          "default": "auto"
+        },
+        "autoplay": {
+          "type": "boolean",
+          "description": "Whether to autoplay the next episode",
+          "default": true
+        },
+        "autoplay_previews": {
+          "type": "boolean",
+          "description": "Whether to autoplay content previews while browsing",
+          "default": true
+        },
+        "mature_content": {
+          "type": "boolean",
+          "description": "Whether mature content should be displayed",
+          "default": false
+        },
+        "parental_controls": {
+          "type": "object",
+          "description": "Parental control settings",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Whether parental controls are enabled",
+              "default": false
+            },
+            "max_maturity_rating": {
+              "type": "string",
+              "enum": ["G", "PG", "PG-13", "R", "NC-17", "TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"],
+              "description": "Maximum allowed content maturity rating"
+            },
+            "pin": {
+              "type": "string",
+              "description": "PIN for accessing restricted content",
+              "minLength": 4,
+              "maxLength": 4
+            },
+            "restricted_profiles": {
+              "type": "array",
+              "description": "Profile IDs that have restricted access",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["enabled"]
+        }
+      },
+      "required": ["language", "subtitle_language", "audio_language", "video_quality", "autoplay"]
+    },
+    "profiles": {
+      "type": "array",
+      "description": "Multiple viewing profiles under one account",
+      "items": {
+        "type": "object",
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "description": "Unique identifier for this profile"
+          },
+          "name": {
+            "type": "string",
+            "description": "Profile name",
+            "minLength": 1,
+            "maxLength": 15
+          },
+          "avatar": {
+            "type": "object",
+            "description": "Profile-specific avatar",
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "image_id": {
+                "type": "string"
+              }
+            }
+          },
+          "is_kids": {
+            "type": "boolean",
+            "description": "Whether this is a kids profile with restricted content",
+            "default": false
+          },
+          "is_main": {
+            "type": "boolean",
+            "description": "Whether this is the main account profile",
+            "default": false
+          },
+          "preferences": {
+            "type": "object",
+            "description": "Profile-specific preferences",
+            "properties": {
+              "language": {
+                "type": "string",
+                "pattern": "^[a-z]{2}$"
+              },
+              "autoplay": {
+                "type": "boolean"
+              },
+              "mature_content": {
+                "type": "boolean"
+              },
+              "watch_history_included": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this profile's watch history affects recommendations"
+              }
+            }
+          },
+          "last_accessed": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this profile was last used"
+          }
+        },
+        "required": ["profile_id", "name", "is_kids", "is_main"]
+      },
+      "maxItems": 5
+    },
+    "devices": {
+      "type": "array",
+      "description": "Devices associated with the user account",
+      "items": {
+        "type": "object",
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "description": "Unique identifier for the device"
+          },
+          "device_type": {
+            "type": "string",
+            "enum": ["smartphone", "tablet", "desktop", "laptop", "smart_tv", "streaming_box", "game_console"],
+            "description": "Type of device"
+          },
+          "device_name": {
+            "type": "string",
+            "description": "User-given name for the device"
+          },
+          "manufacturer": {
+            "type": "string",
+            "description": "Device manufacturer"
+          },
+          "model": {
+            "type": "string",
+            "description": "Device model"
+          },
+          "os": {
+            "type": "string",
+            "description": "Operating system"
+          },
+          "app_version": {
+            "type": "string",
+            "description": "Version of the streaming app on this device"
+          },
+          "first_registered": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this device was first registered"
+          },
+          "last_active": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this device was last used"
+          },
+          "notifications_enabled": {
+            "type": "boolean",
+            "description": "Whether push notifications are enabled on this device",
+            "default": true
+          },
+          "offline_downloads_enabled": {
+            "type": "boolean",
+            "description": "Whether offline downloads are allowed on this device",
+            "default": false
+          },
+          "active_profile": {
+            "type": "string",
+            "description": "ID of the profile last used on this device"
+          }
+        },
+        "required": ["device_id", "device_type", "first_registered"]
+      },
+      "maxItems": 10
+    },
+    "my_list": {
+      "type": "array",
+      "description": "Content items added to user's personal list",
+      "items": {
+        "type": "object",
+        "properties": {
+          "content_id": {
+            "type": "string",
+            "description": "ID of the movie or TV show"
+          },
+          "content_type": {
+            "type": "string",
+            "enum": ["movie", "tv_series", "documentary", "special"],
+            "description": "Type of content"
+          },
+          "added_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the content was added to the list"
+          },
+          "profile_id": {
+            "type": "string",
+            "description": "ID of the profile that added this item"
+          }
+        },
+        "required": ["content_id", "content_type", "added_date", "profile_id"]
+      },
+      "maxItems": 500
+    },
+    "account_metadata": {
+      "type": "object",
+      "description": "Account metadata and timestamps",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user account was created"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user profile was last updated"
+        },
+        "last_login": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user last logged in"
+        },
+        "last_password_change": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user last changed their password"
+        },
+        "email_verified": {
+          "type": "boolean",
+          "description": "Whether the user's email has been verified",
+          "default": false
+        },
+        "email_verification_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the email was verified"
+        },
+        "account_status": {
+          "type": "string",
+          "enum": ["active", "suspended", "closed", "pending_verification"],
+          "description": "Status of the user account"
+        }
+      },
+      "required": ["created_at", "updated_at", "account_status"]
+    }
+  },
+  "required": ["user_id", "username", "email", "subscription", "preferences", "account_metadata"]
+}
+```
+
+Time to first token: 2608 ms
+Time to completion: 259047 ms
+Merkle: 06bb924abe7fc1b4675016f3b99da1d98f92876b09e3990988b2e6143bb05e3b

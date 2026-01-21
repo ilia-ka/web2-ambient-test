@@ -1,0 +1,415 @@
+# Scalable Microservices Architecture for Global Video Streaming Platform
+
+## 1. HIGH-LEVEL SYSTEM DESIGN OVERVIEW
+
+The architecture employs a **cloud-native, event-driven microservices approach** with clear separation of concerns across functional domains:
+
+### **Core Domains & Services:**
+- **Content Delivery Network (CDN) Layer**: Edge-cached video streaming using multiple CDN providers with intelligent routing
+- **User Service**: Manages authentication, profiles, preferences, and subscription tiers
+- **Content Catalog Service**: Handles metadata, categorization, search, and recommendations
+- **Streaming Service**: Adaptive bitrate streaming, video encoding/transcoding pipeline
+- **Playback Service**: Manages watch history, progress syncing, and playback state
+- **Analytics Service**: Real-time viewership analytics and personalization engine
+- **Payment & Billing Service**: Subscription management and global payment processing
+- **Notification Service**: Push notifications and email/SMS alerts
+
+### **Architectural Patterns:**
+- **API Gateway** (Kong/Ambassador) for request routing, rate limiting, and authentication
+- **Event-Driven Communication** via Apache Kafka for loose coupling between services
+- **Polyglot Persistence**: Different databases for different data models (SQL, NoSQL, Time-series)
+- **Service Mesh** (Istio/Linkerd) for service discovery, load balancing, and circuit breaking
+- **Multi-Region Deployment** with active-active configuration for global redundancy
+- **Chaos Engineering** framework for resilience testing
+
+---
+
+## 2. KEY TECHNOLOGIES & RATIONALE
+
+### **Technology Stack:**
+
+- **Apache Kafka**: Chosen for **event streaming backbone** due to its high throughput, durability, and exactly-once semantics, enabling real-time analytics and service decoupling
+- **Kubernetes with Istio**: **Container orchestration and service mesh** for automated scaling, rolling deployments, and fine-grained traffic management across global regions
+- **AWS S3 + CloudFront**: **Object storage and global CDN** for storing encoded video variants with edge delivery optimization and cost-effective storage classes
+- **Cassandra**: **Distributed NoSQL database** selected for its linear scalability, multi-region replication, and tunable consistency, ideal for user watch history and metadata
+- **Redis Cluster**: **In-memory data grid** for session management, rate limiting, and caching personalized recommendations with sub-millisecond latency
+
+---
+
+## 3. PYTHON CODE: SHARDING ALGORITHM FOR USER DATABASE
+
+```python
+"""
+Database Sharding Algorithm for User Service
+Uses consistent hashing with virtual nodes for load distribution
+"""
+
+import hashlib
+import bisect
+from typing import List, Tuple, Dict, Optional
+import json
+from dataclasses import dataclass
+
+
+@dataclass
+class ShardNode:
+    """Represents a physical database shard node"""
+    node_id: str
+    host: str
+    port: int
+    weight: int = 100  # Relative capacity for load distribution
+    is_active: bool = True
+
+
+class ConsistentHashSharder:
+    """
+    Implements consistent hashing with virtual nodes for database sharding.
+    Provides uniform distribution and minimal reshuffling on node changes.
+    """
+    
+    def __init__(self, shard_nodes: List[ShardNode], virtual_nodes_per_shard: int = 200):
+        """
+        Initialize the sharder with physical nodes.
+        
+        Args:
+            shard_nodes: List of physical database shards
+            virtual_nodes_per_shard: Number of virtual nodes per physical node (affects distribution smoothness)
+        """
+        self.shard_nodes = {node.node_id: node for node in shard_nodes}
+        self.virtual_nodes_per_shard = virtual_nodes_per_shard
+        self.hash_ring: List[Tuple[int, str]] = []  # (hash_position, node_id)
+        self.virtual_to_physical: Dict[str, str] = {}  # virtual_node -> physical_node mapping
+        
+        self._build_hash_ring()
+    
+    def _hash_key(self, key: str) -> int:
+        """
+        Generate 32-bit hash for a given key using MD5.
+        
+        Args:
+            key: String to hash (user_id, shard_key, etc.)
+        
+        Returns:
+            32-bit integer hash value
+        """
+        # MD5 provides good distribution; truncate to 32 bits for ring space
+        hash_digest = hashlib.md5(key.encode('utf-8')).hexdigest()
+        return int(hash_digest[:8], 16)  # Use first 8 chars (32 bits)
+    
+    def _build_hash_ring(self) -> None:
+        """Construct the consistent hash ring with virtual nodes"""
+        self.hash_ring.clear()
+        self.virtual_to_physical.clear()
+        
+        for node_id, node in self.shard_nodes.items():
+            if not node.is_active:
+                continue
+                
+            # Create virtual nodes proportionally to node weight
+            virtual_node_count = int((node.weight / 100) * self.virtual_nodes_per_shard)
+            
+            for i in range(virtual_node_count):
+                virtual_node_key = f"{node_id}#virtual_{i}"
+                virtual_node_hash = self._hash_key(virtual_node_key)
+                
+                self.hash_ring.append((virtual_node_hash, virtual_node_key))
+                self.virtual_to_physical[virtual_node_key] = node_id
+        
+        # Sort for binary search operations
+        self.hash_ring.sort(key=lambda x: x[0])
+    
+    def get_shard_for_key(self, shard_key: str) -> Optional[ShardNode]:
+        """
+        Find the appropriate shard node for a given shard key.
+        
+        Args:
+            shard_key: Key to determine shard assignment (e.g., user_id, tenant_id)
+        
+        Returns:
+            ShardNode responsible for the key, or None if no active nodes
+        """
+        if not self.hash_ring:
+            return None
+        
+        # Hash the shard key
+        key_hash = self._hash_key(shard_key)
+        
+        # Find the first virtual node with hash >= key_hash (clockwise on ring)
+        idx = bisect.bisect_left(self.hash_ring, (key_hash, ""))
+        
+        # Wrap around if at end of ring
+        if idx == len(self.hash_ring):
+            idx = 0
+        
+        # Get physical node from virtual node
+        virtual_node_id = self.hash_ring[idx][1]
+        physical_node_id = self.virtual_to_physical.get(virtual_node_id)
+        
+        if physical_node_id:
+            return self.shard_nodes.get(physical_node_id)
+        return None
+    
+    def add_shard_node(self, node: ShardNode) -> None:
+        """
+        Dynamically add a new shard node to the cluster.
+        Only minimal data migration required.
+        
+        Args:
+            node: New shard node to add
+        """
+        if node.node_id in self.shard_nodes:
+            raise ValueError(f"Node {node.node_id} already exists")
+        
+        self.shard_nodes[node.node_id] = node
+        self._build_hash_ring()  # Rebuild ring with new node
+        print(f"Added shard node {node.node_id}. Hash ring rebuilt.")
+    
+    def remove_shard_node(self, node_id: str) -> None:
+        """
+        Remove a shard node from the cluster (e.g., for maintenance).
+        
+        Args:
+            node_id: ID of node to remove
+        """
+        if node_id not in self.shard_nodes:
+            raise ValueError(f"Node {node_id} not found")
+        
+        # Mark as inactive instead of deleting immediately
+        self.shard_nodes[node_id].is_active = False
+        self._build_hash_ring()  # Rebuild without inactive node
+        print(f"Deactivated shard node {node_id}. Hash ring rebuilt.")
+    
+    def get_shard_distribution(self) -> Dict[str, int]:
+        """
+        Analyze current distribution of virtual nodes across physical shards.
+        
+        Returns:
+            Dictionary mapping node_id to virtual node count
+        """
+        distribution = {}
+        for virtual_node, physical_node in self.virtual_to_physical.items():
+            distribution[physical_node] = distribution.get(physical_node, 0) + 1
+        return distribution
+
+
+# Example usage
+if __name__ == "__main__":
+    # Initialize shard nodes in different regions
+    shard_nodes = [
+        ShardNode("us-east-1-shard-1", "db-us-east-1a.example.com", 5432, weight=150),
+        ShardNode("us-west-2-shard-1", "db-us-west-2a.example.com", 5432, weight=100),
+        ShardNode("eu-west-1-shard-1", "db-eu-west-1a.example.com", 5432, weight=100),
+        ShardNode("ap-southeast-1-shard-1", "db-ap-southeast-1a.example.com", 5432, weight=80),
+    ]
+    
+    # Create sharder instance
+    sharder = ConsistentHashSharder(shard_nodes, virtual_nodes_per_shard=200)
+    
+    # Test shard assignment for user IDs
+    test_user_ids = ["user_12345", "user_67890", "user_abcde", "user_fghij"]
+    
+    print("Shard Assignments:")
+    print("-" * 50)
+    for user_id in test_user_ids:
+        assigned_shard = sharder.get_shard_for_key(user_id)
+        if assigned_shard:
+            print(f"User '{user_id}' -> Shard: {assigned_shard.node_id} ({assigned_shard.host})")
+    
+    # Show distribution analysis
+    print("\nVirtual Node Distribution:")
+    print("-" * 50)
+    distribution = sharder.get_shard_distribution()
+    for node_id, count in distribution.items():
+        print(f"{node_id}: {count} virtual nodes ({count/sum(distribution.values())*100:.1f}%)")
+    
+    # Demonstrate dynamic scaling
+    print("\nAdding new shard node...")
+    new_node = ShardNode("sa-east-1-shard-1", "db-sa-east-1a.example.com", 5432, weight=70)
+    sharder.add_shard_node(new_node)
+    
+    # Verify new assignment for existing user
+    user_id = "user_12345"
+    new_assigned_shard = sharder.get_shard_for_key(user_id)
+    print(f"\nAfter scaling, user '{user_id}' now assigned to: {new_assigned_shard.node_id}")
+```
+
+---
+
+## 4. JSON SCHEMA: USER PROFILE OBJECT
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-2020-12/schema#",
+  "title": "UserProfile",
+  "description": "Complete user profile schema for video streaming platform",
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string",
+      "description": "Globally unique user identifier (UUID v4)",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "profileId": {
+      "type": "string",
+      "description": "Profile identifier within household (UUID v4)",
+      "format": "uuid"
+    },
+    "accountTier": {
+      "type": "string",
+      "description": "Subscription tier level",
+      "enum": ["basic", "standard", "premium", "family", "trial"],
+      "default": "standard"
+    },
+    "personalization": {
+      "type": "object",
+      "description": "User preferences and personalization settings",
+      "properties": {
+        "displayLanguage": {
+          "type": "string",
+          "description": "UI display language (ISO 639-1)",
+          "pattern": "^[a-z]{2}$",
+          "default": "en"
+        },
+        "contentLanguagePreferences": {
+          "type": "array",
+          "description": "Preferred content languages in order",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          },
+          "default": ["en-US", "en"]
+        },
+        "autoplayNextEpisode": {
+          "type": "boolean",
+          "description": "Whether to autoplay next episode",
+          "default": true
+        },
+        "maturityRating": {
+          "type": "string",
+          "description": "Maximum allowed content rating",
+          "enum": ["G", "PG", "PG-13", "R", "NC-17"],
+          "default": "R"
+        },
+        "subtitlePreferences": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "language": {
+              "type": "string",
+              "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+              "default": "en"
+            },
+            "size": {
+              "type": "string",
+              "enum": ["small", "medium", "large"],
+              "default": "medium"
+            }
+          }
+        }
+      },
+      "required": ["displayLanguage", "contentLanguagePreferences"]
+    },
+    "watchHistorySummary": {
+      "type": "object",
+      "description": "Aggregated watch statistics",
+      "properties": {
+        "totalWatchMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lifetime watch time in minutes"
+        },
+        "lastWatchedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of last watch activity"
+        },
+        "currentlyWatching": {
+          "type": "array",
+          "description": "Content IDs currently in progress",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{12}$"
+          },
+          "maxItems": 20
+        }
+      }
+    },
+    "deviceLimits": {
+      "type": "object",
+      "description": "Concurrent streaming limitations",
+      "properties": {
+        "maxConcurrentStreams": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4,
+          "default": 2
+        },
+        "registeredDevices": {
+          "type": "array",
+          "description": "List of registered device fingerprints",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 10
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "System metadata and timestamps",
+      "properties": {
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "profileVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Schema version for migration purposes"
+        },
+        "dataShardId": {
+          "type": "string",
+          "description": "Database shard identifier for horizontal partitioning"
+        }
+      },
+      "required": ["createdAt", "updatedAt", "profileVersion"]
+    }
+  },
+  "required": [
+    "userId",
+    "profileId",
+    "accountTier",
+    "personalization",
+    "metadata"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ARCHITECTURE CONSIDERATIONS & FUTURE SCALING
+
+### **Data Consistency Strategy:**
+- **Strong Consistency**: User authentication, payment processing
+- **Eventual Consistency**: Watch history, recommendations, social features
+- **Causal Consistency**: Playback progress across devices
+
+### **Global Deployment Strategy:**
+- **Multi-Active Regions**: Users routed to nearest healthy region
+- **Cell-Based Architecture**: Isolate failures to single cells
+- **Blue-Green Deployments**: Zero-downtime deployments with canary analysis
+
+### **Monitoring & Observability:**
+- Distributed tracing (Jaeger/Zipkin) for cross-service call tracking
+- Metrics aggregation (Prometheus) with SLO-based alerting
+- Structured logging with correlation IDs for debugging
+
+This architecture supports **100M+ concurrent users** with 99.99% availability while maintaining sub-200ms latency for core interactions.

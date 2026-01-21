@@ -3,6 +3,7 @@ import os
 from ..config import get_config
 from ..streaming import stream_chat
 from .openai import get_openai_settings
+from .openrouter import get_openrouter_settings
 from .prompt import load_prompt
 
 
@@ -38,12 +39,43 @@ def run() -> None:
         if not openai_settings.api_key:
             print("Error: OPENAI_API_KEY is not set. Add it to .env or your environment.")
             return
-        if ambient_ran:
-            print("")
-        _run_stream(
-            "OpenAI",
-            openai_settings.api_url,
-            openai_settings.api_key,
-            prompt,
-            openai_settings.model,
-        )
+        if not openai_settings.models:
+            print(
+                "Error: No OpenAI models enabled. Set OPENAI_MODEL or OPENAI_MODELS "
+                "and enable per-model flags if needed."
+            )
+            return
+        for index, model in enumerate(openai_settings.models):
+            if ambient_ran or index > 0:
+                print("")
+            if not _run_stream(
+                f"OpenAI ({model})",
+                openai_settings.api_url,
+                openai_settings.api_key,
+                prompt,
+                model,
+            ):
+                return
+
+    openrouter_settings = get_openrouter_settings()
+    if openrouter_settings.enabled:
+        if not openrouter_settings.api_key:
+            print("Error: OPENROUTER_API is not set. Add it to .env or your environment.")
+            return
+        if not openrouter_settings.models:
+            print(
+                "Error: No OpenRouter models enabled. Set OPENROUTER_MODEL or "
+                "OPENROUTER_MODELS and enable per-model flags if needed."
+            )
+            return
+        for index, model in enumerate(openrouter_settings.models):
+            if ambient_ran or openai_settings.enabled or index > 0:
+                print("")
+            if not _run_stream(
+                f"OpenRouter ({model})",
+                openrouter_settings.api_url,
+                openrouter_settings.api_key,
+                prompt,
+                model,
+            ):
+                return

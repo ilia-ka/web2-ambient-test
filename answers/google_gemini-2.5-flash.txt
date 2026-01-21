@@ -1,0 +1,447 @@
+As a Senior Software Architect, I'm delighted to lay out a scalable microservices architecture for a global video streaming platform. This design prioritizes high availability, low latency, global reach, and easy evolution.
+
+---
+
+## 1. High-Level Textual Overview of the System Design
+
+Our video streaming platform will be built on a **microservices-oriented architecture**, deployed across multiple global regions (AWS, Azure, GCP for resilience and proximity to users). This distributed approach allows independent development, deployment, and scaling of functionalities.
+
+**Core Principles:**
+
+*   **API Gateway:** All external requests (from client applications: web, mobile, smart TVs) will first hit an API Gateway. This gateway handles authentication, rate limiting, request routing, and potentially protocol translation.
+*   **Service Mesh:** An Istio or Linkerd-like service mesh will sit atop our microservices, providing traffic management (like canary deployments, A/B testing), observability (metrics, tracing, logging), and enhanced security (mTLS).
+*   **Asynchronous Communication:** Services will primarily communicate asynchronously using message queues (Kafka) for events, state changes, and long-running processes (e.g., video transcoding, recommendation engine updates). Synchronous communication over gRPC or REST will be used for direct requests where immediate responses are needed.
+*   **Polyglot Persistence:** We'll leverage different database technologies best suited for specific service needs. For instance, NoSQL for user profiles and analytics, relational databases for billing and content metadata, and search engines for content discovery.
+*   **CDN Integration:** A multi-CDN strategy will be crucial for delivering video content globally with minimal latency. Intelligent routing will choose the optimal CDN for each user request.
+*   **Stream Processing:** Real-time analytics, recommendation generation, and anomaly detection will be powered by stream processing frameworks (e.g., Flink, Kafka Streams).
+*   **Observability:** Comprehensive logging, metrics, and distributed tracing will be central to monitoring the health and performance of the entire system, aiding in rapid debugging and proactive issue resolution.
+*   **Security:** End-to-end encryption (TLS/SSL), robust authentication (OAuth 2.0, OpenID Connect), authorization (RBAC), and secrets management (Vault) will be implemented across the platform.
+
+**Key Microservices (Illustrative Example):**
+
+*   **User Service:** Manages user profiles, authentication, authorization.
+*   **Content Catalog Service:** Stores metadata for all videos, series, episodes.
+*   **Streaming Service:** Handles adaptive bitrate streaming, content delivery configuration, DRM integration.
+*   **Recommendation Service:** Personalized content suggestions based on viewing history, ratings, and user preferences.
+*   **Billing & Subscription Service:** Manages subscriptions, payments, and invoices.
+*   **Analytics Service:** Ingests and processes viewing data, user behavior, and platform performance.
+*   **Transcoding Service:** Processes uploaded video assets into various formats and resolutions for different devices.
+*   **Search Service:** Provides full-text search capabilities for content.
+*   **Watch History Service:** Tracks user viewing progress.
+
+This modular design allows us to scale individual components as needed, quickly introduce new features, and ensure high resilience against failures.
+
+---
+
+## 2. Key Technologies
+
+Here are 5 key technologies chosen for this architecture and their justifications:
+
+*   **Kubernetes (K8s):**
+    *   **Why:** For orchestration, deployment, scaling, and management of our containerized microservices. Its self-healing capabilities, declarative configuration, and robust ecosystem are essential for managing a complex, globally distributed system. It abstracts away underlying infrastructure, allowing developers to focus on application logic.
+
+*   **Apache Kafka:**
+    *   **Why:** As a highly scalable, fault-tolerant distributed streaming platform, Kafka will be the backbone for asynchronous communication between microservices. It's ideal for event sourcing, message queuing, real-time data pipelines (e.g., viewing events, user actions), and enabling stream processing for analytics and recommendations. Its high throughput and durability are critical for a data-intensive platform.
+
+*   **Cassandra (or DynamoDB/Cosmos DB if cloud-native):**
+    *   **Why:** For storing massive amounts of data with high availability and linear scalability, especially for user profiles, watch history, and content metadata that require fast read/write access across global regions. Its eventually consistent nature for some data (like watch history) is acceptable and beneficial for performance, while its tunable consistency allows for stricter guarantees where needed (e.g., content catalog updates).
+
+*   **gRPC:**
+    *   **Why:** For high-performance, language-agnostic inter-service communication where synchronous RPCs are required. gRPC uses Protocol Buffers for efficient serialization, and HTTP/2 for multiplexing, streaming, and lower latency compared to traditional REST + JSON. This is crucial for performance-sensitive internal APIs within the service mesh.
+
+*   **Elasticsearch (with Kibana and Logstash - ELK Stack):**
+    *   **Why:** For powerful full-text search capabilities (for content discovery), centralized logging, and real-time operational analytics/monitoring. Elasticsearch's distributed nature and speed make it ideal for handling large volumes of log data and providing fast search results for users and developers alike.
+
+---
+
+## 3. Complex Python Code Snippet: Consistent Hashing Sharding Algorithm
+
+This Python code demonstrates a **Consistent Hashing** algorithm specifically adapted for sharding user data across different database instances (shards). Consistent hashing minimizes data movement when adding or removing shards, which is crucial for
+a dynamic, scalable system.
+
+```python
+import hashlib
+import bisect
+from collections import defaultdict
+
+class ShardNode:
+    """Represents a database shard node."""
+    def __init__(self, node_id, capacity=1000000):
+        self.node_id = node_id
+        self.data_store = {}  # Simulates key-value storage for the shard
+        self.capacity = capacity # Max items this shard can hold
+        self.current_size = 0
+
+    def add_data(self, key, value):
+        """Adds data to this shard."""
+        if self.current_size >= self.capacity:
+            raise ShardCapacityError(f"Shard {self.node_id} is full.")
+        self.data_store[key] = value
+        self.current_size += 1
+        return True
+
+    def get_data(self, key):
+        """Retrieves data from this shard."""
+        return self.data_store.get(key)
+
+    def remove_data(self, key):
+        """Removes data from this shard."""
+        if key in self.data_store:
+            del self.data_store[key]
+            self.current_size -= 1
+            return True
+        return False
+        
+    def __str__(self):
+        return f"ShardNode({self.node_id}, items={self.current_size})"
+
+class ShardCapacityError(Exception):
+    """Custom exception for shard capacity issues."""
+    pass
+
+class ConsistentHashingShardManager:
+    """
+    Manages sharding using a consistent hashing ring.
+    This approach minimizes data rebalancing when shards are added/removed.
+    """
+    def __init__(self, num_replicas=3):
+        self.num_replicas = num_replicas  # Number of virtual nodes per physical shard
+        self.ring = []                    # Sorted list of hash values on the ring
+        self.node_map = {}                # Maps hash values to actual ShardNode instances
+        self.physical_shards = {}         # Maps shard_id to ShardNode instances
+
+    def _get_hash(self, key):
+        """Generates a consistent hash for a given key."""
+        # Using SHA-1 for a 160-bit hash, then modulo 2^32 for 32-bit integer representation
+        # It's important to use a wide enough hash space.
+        return int(hashlib.sha1(key.encode('utf-8')).hexdigest(), 16) & 0xFFFFFFFF
+
+    def add_shard(self, shard_id, capacity=1000000):
+        """
+        Adds a new physical shard to the consistent hash ring.
+        Generates 'num_replicas' virtual nodes for the physical shard.
+        """
+        if shard_id in self.physical_shards:
+            print(f"Warning: Shard {shard_id} already exists.")
+            return
+
+        new_shard = ShardNode(shard_id, capacity)
+        self.physical_shards[shard_id] = new_shard
+
+        for i in range(self.num_replicas):
+            virtual_node_key = f"{shard_id}-{i}"
+            virtual_node_hash = self._get_hash(virtual_node_key)
+            
+            # Insert the hash into the sorted ring
+            bisect.insort_left(self.ring, virtual_node_hash)
+            self.node_map[virtual_node_hash] = new_shard
+            print(f"Added virtual node {virtual_node_key} to ring at hash {virtual_node_hash}")
+
+        # In a real system, data would be rebalanced here from other shards
+        # to the new shard, only for the keys that now map to this new shard.
+        print(f"Physical shard '{shard_id}' added with {self.num_replicas} virtual nodes.")
+
+    def remove_shard(self, shard_id):
+        """
+        Removes a physical shard from the consistent hash ring.
+        Associated data needs to be rebalanced before actual removal.
+        """
+        if shard_id not in self.physical_shards:
+            print(f"Warning: Shard {shard_id} not found.")
+            return
+
+        shard_to_remove = self.physical_shards[shard_id]
+        
+        # Identify all virtual nodes belonging to this physical shard
+        virtual_node_hashes_to_remove = []
+        for hash_val, node in self.node_map.items():
+            if node.node_id == shard_id:
+                virtual_node_hashes_to_remove.append(hash_val)
+        
+        # Remove virtual nodes from the ring and map
+        for hash_val in virtual_node_hashes_to_remove:
+            self.ring.remove(hash_val) # Note: List.remove can be slow for large lists. For production, consider sorted_list data structure or more efficient removal.
+            del self.node_map[hash_val]
+            print(f"Removed virtual node associated with {shard_id} at hash {hash_val}")
+
+        # Data rebalancing: In a production system, all data from the removed shard
+        # would need to be re-hashed and migrated to their new target shards.
+        # For simplicity, this simulation just drops the data.
+        print(f"Migrating data from shard {shard_id}...")
+        for key in list(shard_to_remove.data_store.keys()): # Iterate over a copy to allow modification
+            value = shard_to_remove.get_data(key)
+            # Find new shard for the key
+            new_shard = self._get_shard_for_key(key)
+            if new_shard and new_shard.node_id != shard_id: # Only re-add if it goes to a different shard
+                try:
+                    new_shard.add_data(key, value)
+                    print(f"Rebalanced key '{key}' from {shard_id} to {new_shard.node_id}")
+                except ShardCapacityError as e:
+                    print(f"Error rebalancing key '{key}': {e}. Data might be lost or require manual intervention.")
+            else:
+                print(f"Key '{key}' was mapped to the removed shard {shard_id} and would ideally be migrated, but no new shard found or it maps back to the same (problematic) shard.")
+
+        del self.physical_shards[shard_id]
+        print(f"Physical shard '{shard_id}' removed.")
+
+
+    def _get_shard_for_key(self, key):
+        """
+        Determines which physical shard a given key should map to using consistent hashing.
+        """
+        if not self.ring:
+            return None
+
+        key_hash = self._get_hash(key)
+        
+        # Find the first virtual node on the ring whose hash is greater than or equal to the key's hash.
+        # If no such node is found, it wraps around to the first node in the ring.
+        shard_idx = bisect.bisect_left(self.ring, key_hash)
+        if shard_idx == len(self.ring):
+            shard_idx = 0  # Wrap around
+
+        target_hash = self.ring[shard_idx]
+        return self.node_map[target_hash]
+
+    def add_user_profile(self, user_id, profile_data):
+        """Adds a user profile to the appropriate shard."""
+        shard = self._get_shard_for_key(user_id)
+        if shard:
+            try:
+                shard.add_data(user_id, profile_data)
+                print(f"User '{user_id}' added to shard '{shard.node_id}'.")
+                return True
+            except ShardCapacityError as e:
+                print(f"Failed to add user '{user_id}': {e}. Need to add more shards or rebalance.")
+                return False
+        else:
+            print(f"No shards available to add user '{user_id}'.")
+            return False
+
+    def get_user_profile(self, user_id):
+        """Retrieves a user profile from its assigned shard."""
+        shard = self._get_shard_for_key(user_id)
+        if shard:
+            return shard.get_data(user_id)
+        return None
+
+    def display_shard_status(self):
+        """Prints the current status of all physical shards."""
+        print("\n--- Shard Status ---")
+        if not self.physical_shards:
+            print("No shards currently active.")
+            return
+
+        for shard_id, shard in self.physical_shards.items():
+            print(f"Shard ID: {shard.node_id}, Items: {shard.current_size}/{shard.capacity}")
+        print("--------------------")
+
+# --- Example Usage ---
+if __name__ == "__main__":
+    shard_manager = ConsistentHashingShardManager(num_replicas=3)
+
+    # 1. Add initial shards
+    print("----- Adding Initial Shards -----")
+    shard_manager.add_shard("db_shard_01", capacity=3)
+    shard_manager.add_shard("db_shard_02", capacity=3)
+    shard_manager.display_shard_status()
+
+    # 2. Add some user profiles
+    print("\n----- Adding User Profiles (User data: {user_id: profile_data}) -----")
+    users = {
+        "user_alice": {"name": "Alice", "email": "alice@example.com"},
+        "user_bob": {"name": "Bob", "email": "bob@example.com"},
+        "user_charlie": {"name": "Charlie", "email": "charlie@example.com"},
+        "user_david": {"name": "David", "email": "david@example.com"},
+        "user_eve": {"name": "Eve", "email": "eve@example.com"},
+        "user_frank": {"name": "Frank", "email": "frank@example.com", "fav_genre": "SciFi"},
+        "user_grace": {"name": "Grace", "email": "grace@example.com", "lang": "fr"},
+    }
+
+    for user_id, profile_data in users.items():
+        shard_manager.add_user_profile(user_id, profile_data)
+    shard_manager.display_shard_status()
+
+    # 3. Retrieve a user profile
+    print("\n----- Retrieving User Profiles -----")
+    print(f"Profile for user_bob: {shard_manager.get_user_profile('user_bob')}")
+    print(f"Profile for user_charlie: {shard_manager.get_user_profile('user_charlie')}")
+    print(f"Profile for non_existent_user: {shard_manager.get_user_profile('non_existent_user')}")
+
+    # 4. Add more shards (simulate scaling up)
+    print("\n----- Adding More Shards (Scaling Up) -----")
+    shard_manager.add_shard("db_shard_03", capacity=3)
+    shard_manager.add_shard("db_shard_04", capacity=3)
+    shard_manager.display_shard_status()
+    # Note: Consistent hashing means only a small fraction of keys *might* move.
+    # In this simplified demo, we don't trigger actual migration logic on add,
+    # but the mapping for new keys will correctly distributed.
+    
+    # Let's add more users to see distribution with new shards
+    print("\n----- Adding more users after scaling -----")
+    shard_manager.add_user_profile("user_helen", {"name": "Helen"})
+    shard_manager.add_user_profile("user_ivan", {"name": "Ivan"})
+    shard_manager.display_shard_status()
+    
+    # 5. Remove a shard (simulate scaling down or failure)
+    print("\n----- Removing a Shard (Scaling Down / Failure) -----")
+    # Before removal, we need to handle data migration. This simulation attempts it.
+    shard_manager.remove_shard("db_shard_01")
+    shard_manager.display_shard_status()
+    
+    # Try to retrieve data that was on the removed shard
+    print(f"Profile for user_alice (should be rebalanced/lost if not rebalanced correctly): {shard_manager.get_user_profile('user_alice')}")
+    # Alice might now map to a different shard and be retrieved, or if rebalancing failed, it could be None.
+    
+    # 6. Test adding a user when all shards are full (simulated capacity)
+    print("\n----- Testing Shard Capacity -----")
+    shard_manager.add_user_profile("user_z_test_full_1", {"name": "Zoe"}) 
+    shard_manager.add_user_profile("user_z_test_full_2", {"name": "Zach"})
+    shard_manager.add_user_profile("user_z_test_full_3", {"name": "Zara"}) # This might fill one shard
+    shard_manager.add_user_profile("user_z_test_overflow", {"name": "Overflow"}) # This should trigger capacity error on some shard
+    shard_manager.display_shard_status()
+
+```
+
+---
+
+## 4. JSON Schema Example for a User Profile Object
+
+This JSON schema defines the structure and validation rules for a `UserProfile` object. This helps ensure data consistency across services and facilitates API development.
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UserProfile",
+  "description": "Schema for a user's profile on the streaming platform.",
+  "type": "object",
+  "required": [
+    "userId",
+    "email",
+    "firstName",
+    "lastName",
+    "countryCode",
+    "registrationDate",
+    "accountStatus",
+    "subscriptionPlan"
+  ],
+  "properties": {
+    "userId": {
+      "type": "string",
+      "description": "Unique identifier for the user.",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "description": "User's primary email address, must be unique."
+    },
+    "firstName": {
+      "type": "string",
+      "description": "User's first name.",
+      "minLength": 1,
+      "maxLength": 50
+    },
+    "lastName": {
+      "type": "string",
+      "description": "User's last name.",
+      "minLength": 1,
+      "maxLength": 50
+    },
+    "profilePictureUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL to the user's profile picture.",
+      "nullable": true
+    },
+    "countryCode": {
+      "type": "string",
+      "description": "ISO 3166-1 alpha-2 country code.",
+      "pattern": "^[A-Z]{2}$"
+    },
+    "preferredLanguage": {
+      "type": "string",
+      "description": "ISO 639-1 language code (e.g., 'en', 'es', 'fr').",
+      "pattern": "^[a-z]{2}$",
+      "default": "en"
+    },
+    "registrationDate": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of account registration (ISO 8601 format)."
+    },
+    "lastLoginDate": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of user's last login (ISO 8601 format).",
+      "nullable": true
+    },
+    "accountStatus": {
+      "type": "string",
+      "description": "Current status of the user's account.",
+      "enum": [
+        "active",
+        "pending_email_verification",
+        "suspended",
+        "cancelled"
+      ]
+    },
+    "subscriptionPlan": {
+      "type": "string",
+      "description": "Current subscription plan.",
+      "enum": [
+        "free_trial",
+        "basic",
+        "standard",
+        "premium"
+      ]
+    },
+    "paymentMethodId": {
+      "type": "string",
+      "description": "Identifier for the stored payment method (e.g., Stripe customer ID or internal token).",
+      "nullable": true
+    },
+    "parentalControlEnabled": {
+      "type": "boolean",
+      "description": "Indicates if parental controls are active.",
+      "default": false
+    },
+    "maxContentRating": {
+      "type": "string",
+      "description": "Maximum content rating allowed (e.g., G, PG, PG-13, R, NC-17). Applicable if parentalControlEnabled is true.",
+      "enum": ["G", "PG", "PG-13", "R", "NC-17", "UNRATED"],
+      "nullable": true
+    },
+    "favoriteGenres": {
+      "type": "array",
+      "description": "List of the user's favorite content genres.",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "notificationPreferences": {
+      "type": "object",
+      "description": "User's preferences for receiving notifications.",
+      "properties": {
+        "emailNotifications": {
+          "type": "boolean",
+          "default": true
+        },
+        "pushNotifications": {
+          "type": "boolean",
+          "default": true
+        },
+        "smsNotifications": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "additionalProperties": false
+}
+```

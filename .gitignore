@@ -2,3 +2,5 @@
 .idea
 .env
 AGENTS.md
+__pycache__/
+*.pyc

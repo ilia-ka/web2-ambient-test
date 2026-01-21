@@ -1,0 +1,624 @@
+# Scalable Microservices Architecture for Global Video Streaming Platform
+
+## 1. High-Level System Design Overview
+
+### Architecture Philosophy
+The platform follows a **distributed microservices architecture** with regional deployment, employing CDN-based content delivery, event-driven communication, and polyglot persistence patterns.
+
+### Core Components
+
+#### Frontend Layer
+- **Web/Mobile Applications**: React/React Native with Server-Side Rendering (SSR)
+- **API Gateway**: Single entry point with authentication, rate limiting, and request routing
+- **CDN Integration**: CloudFront/Akamai for static assets and video streaming
+
+#### Microservices Layer
+
+**User Management Service**
+- Authentication & authorization (OAuth 2.0, JWT)
+- User profiles, preferences, and subscriptions
+- Multi-region database replication
+
+**Content Catalog Service**
+- Metadata management (titles, descriptions, genres, cast)
+- Search and recommendation indexing
+- Elasticsearch integration for fast queries
+
+**Video Processing Service**
+- Transcoding pipeline (multiple resolutions: 4K, 1080p, 720p, 480p)
+- Adaptive Bitrate Streaming (ABR) generation
+- Thumbnail and preview generation
+- DRM encryption
+
+**Streaming Service**
+- HLS/DASH manifest generation
+- Adaptive streaming logic
+- Quality selection based on bandwidth
+
+**Recommendation Engine**
+- Machine learning models (collaborative filtering, content-based)
+- Real-time personalization
+- A/B testing framework
+
+**Analytics Service**
+- Watch history tracking
+- Real-time metrics collection
+- User behavior analysis
+- Business intelligence aggregation
+
+**Billing Service**
+- Subscription management
+- Payment processing (Stripe/PayPal integration)
+- Invoice generation
+
+**Notification Service**
+- Email/SMS/Push notifications
+- Event-driven triggers
+- Template management
+
+#### Data Layer
+- **User Data**: PostgreSQL with read replicas (sharded by user_id)
+- **Content Metadata**: MongoDB for flexible schema
+- **Session Data**: Redis for caching and real-time data
+- **Analytics**: Apache Kafka + ClickHouse for time-series data
+- **Search Index**: Elasticsearch cluster
+- **Object Storage**: S3/GCS for video files
+
+#### Infrastructure Layer
+- **Container Orchestration**: Kubernetes with multi-region clusters
+- **Service Mesh**: Istio for traffic management and observability
+- **Message Queue**: Apache Kafka for event streaming
+- **Monitoring**: Prometheus, Grafana, ELK stack
+- **CI/CD**: GitLab CI/Jenkins with automated testing
+
+### Data Flow Example (Video Playback)
+1. User requests video -> API Gateway -> Authentication Service
+2. Authorization verified -> Streaming Service generates manifest
+3. CDN delivers video segments from nearest edge location
+4. Analytics Service logs playback events asynchronously via Kafka
+5. Recommendation Engine updates user profile in real-time
+
+### Scalability Patterns
+- **Horizontal Scaling**: Auto-scaling groups for each microservice
+- **Database Sharding**: Hash-based sharding on user_id and content_id
+- **Caching Strategy**: Multi-level (CDN -> Redis -> Database)
+- **Asynchronous Processing**: Event-driven architecture for non-critical operations
+- **Geographic Distribution**: Regional deployments with data locality
+
+---
+
+## 2. Key Technologies Selection
+
+* **Kubernetes (K8s)** - Container orchestration platform providing automated deployment, scaling, and management of microservices across multi-cloud environments. Enables seamless horizontal scaling, self-healing, and zero-downtime deployments critical for 99.99% uptime SLA.
+
+* **Apache Kafka** - Distributed event streaming platform for building real-time data pipelines. Handles millions of events per second for analytics, user activity tracking, and inter-service communication with guaranteed message delivery and fault tolerance.
+
+* **PostgreSQL with Citus Extension** - Distributed relational database for user data and transactional workloads. Provides ACID compliance while enabling horizontal scalability through sharding. Citus transforms PostgreSQL into a distributed database without application rewrites.
+
+* **Redis Cluster** - In-memory data store for sub-millisecond latency caching. Used for session management, API response caching, rate limiting, and real-time leaderboards. Reduces database load by 70-80% through intelligent caching strategies.
+
+* **Elasticsearch** - Distributed search and analytics engine for content discovery. Powers the search functionality with full-text search, fuzzy matching, and real-time indexing. Handles complex queries across millions of titles with response times under 100ms.
+
+---
+
+## 3. Database Sharding Algorithm Implementation
+
+```python
+import hashlib
+import bisect
+from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+import json
+
+
+@dataclass
+class ShardNode:
+    """
+    Represents a physical database shard node in the cluster.
+    """
+    node_id: str
+    host: str
+    port: int
+    weight: int  # Higher weight = more virtual nodes in consistent hashing
+    is_active: bool = True
+    capacity_percent: float = 0.0  # Current utilization percentage
+    
+    def __repr__(self):
+        return f"ShardNode(id={self.node_id}, host={self.host}, active={self.is_active})"
+
+
+class ConsistentHashingShardManager:
+    """
+    Advanced sharding algorithm using Consistent Hashing with Virtual Nodes.
+    
+    This implementation provides:
+    - Minimal data movement when adding/removing nodes
+    - Even distribution of keys across shards
+    - Support for weighted nodes (heterogeneous hardware)
+    - Replication factor for high availability
+    - Automatic rebalancing capabilities
+    """
+    
+    def __init__(self, virtual_nodes_per_shard: int = 150, replication_factor: int = 3):
+        """
+        Initialize the shard manager.
+        
+        Args:
+            virtual_nodes_per_shard: Number of virtual nodes per physical shard
+            replication_factor: Number of replicas for each data key
+        """
+        self.virtual_nodes_per_shard = virtual_nodes_per_shard
+        self.replication_factor = replication_factor
+        self.ring: List[int] = []  # Sorted list of hash values
+        self.ring_map: Dict[int, ShardNode] = {}  # Hash -> ShardNode mapping
+        self.shards: Dict[str, ShardNode] = {}  # node_id -> ShardNode
+        
+    def add_shard(self, shard: ShardNode) -> None:
+        """
+        Add a new shard to the consistent hashing ring.
+        Creates virtual nodes based on the shard's weight.
+        
+        Args:
+            shard: ShardNode object to add
+        """
+        if shard.node_id in self.shards:
+            raise ValueError(f"Shard {shard.node_id} already exists")
+        
+        self.shards[shard.node_id] = shard
+        
+        # Create virtual nodes proportional to weight
+        num_virtual_nodes = self.virtual_nodes_per_shard * shard.weight
+        
+        for i in range(num_virtual_nodes):
+            # Create unique virtual node identifier
+            virtual_node_key = f"{shard.node_id}:vnode:{i}"
+            hash_value = self._hash(virtual_node_key)
+            
+            # Insert into sorted ring using binary search
+            bisect.insort(self.ring, hash_value)
+            self.ring_map[hash_value] = shard
+            
+        print(f"Added shard {shard.node_id} with {num_virtual_nodes} virtual nodes")
+    
+    def remove_shard(self, node_id: str) -> Optional[ShardNode]:
+        """
+        Remove a shard from the ring and return it.
+        This triggers data migration to other nodes.
+        
+        Args:
+            node_id: Identifier of the shard to remove
+            
+        Returns:
+            Removed ShardNode or None if not found
+        """
+        if node_id not in self.shards:
+            return None
+        
+        shard = self.shards.pop(node_id)
+        
+        # Remove all virtual nodes for this shard
+        keys_to_remove = [h for h, s in self.ring_map.items() if s.node_id == node_id]
+        
+        for hash_value in keys_to_remove:
+            self.ring.remove(hash_value)
+            del self.ring_map[hash_value]
+        
+        print(f"Removed shard {node_id} with {len(keys_to_remove)} virtual nodes")
+        return shard
+    
+    def get_shard_for_key(self, key: str) -> Optional[ShardNode]:
+        """
+        Determine which shard should store the given key.
+        
+        Args:
+            key: The data key (e.g., user_id, content_id)
+            
+        Returns:
+            Primary ShardNode for this key
+        """
+        if not self.ring:
+            return None
+        
+        hash_value = self._hash(key)
+        
+        # Find the first node clockwise from the hash value
+        index = bisect.bisect_right(self.ring, hash_value)
+        
+        # Wrap around if necessary
+        if index == len(self.ring):
+            index = 0
+        
+        return self.ring_map[self.ring[index]]
+    
+    def get_replica_shards(self, key: str) -> List[ShardNode]:
+        """
+        Get all replica shards for a given key (including primary).
+        Ensures replicas are on different physical nodes.
+        
+        Args:
+            key: The data key
+            
+        Returns:
+            List of ShardNodes for replication
+        """
+        if not self.ring:
+            return []
+        
+        hash_value = self._hash(key)
+        index = bisect.bisect_right(self.ring, hash_value)
+        
+        replicas = []
+        seen_nodes = set()
+        attempts = 0
+        max_attempts = len(self.ring)
+        
+        # Find distinct physical nodes for replication
+        while len(replicas) < self.replication_factor and attempts < max_attempts:
+            if index >= len(self.ring):
+                index = 0
+            
+            shard = self.ring_map[self.ring[index]]
+            
+            # Only add if it's a different physical node and active
+            if shard.node_id not in seen_nodes and shard.is_active:
+                replicas.append(shard)
+                seen_nodes.add(shard.node_id)
+            
+            index += 1
+            attempts += 1
+        
+        return replicas
+    
+    def get_distribution_stats(self) -> Dict[str, any]:
+        """
+        Calculate distribution statistics across shards.
+        Useful for monitoring and rebalancing decisions.
+        
+        Returns:
+            Dictionary with distribution metrics
+        """
+        if not self.shards:
+            return {}
+        
+        virtual_node_counts = {}
+        for shard_id in self.shards:
+            count = sum(1 for s in self.ring_map.values() if s.node_id == shard_id)
+            virtual_node_counts[shard_id] = count
+        
+        total_vnodes = len(self.ring)
+        
+        stats = {
+            "total_shards": len(self.shards),
+            "total_virtual_nodes": total_vnodes,
+            "shard_distribution": {
+                shard_id: {
+                    "virtual_nodes": count,
+                    "percentage": (count / total_vnodes * 100) if total_vnodes > 0 else 0,
+                    "capacity": self.shards[shard_id].capacity_percent
+                }
+                for shard_id, count in virtual_node_counts.items()
+            },
+            "replication_factor": self.replication_factor
+        }
+        
+        return stats
+    
+    def _hash(self, key: str) -> int:
+        """
+        Generate consistent hash value for a key using MD5.
+        
+        Args:
+            key: String to hash
+            
+        Returns:
+            Integer hash value
+        """
+        return int(hashlib.md5(key.encode('utf-8')).hexdigest(), 16)
+
+
+# Example usage demonstrating the sharding system
+if __name__ == "__main__":
+    # Initialize shard manager
+    shard_manager = ConsistentHashingShardManager(
+        virtual_nodes_per_shard=100,
+        replication_factor=3
+    )
+    
+    # Create shard nodes (simulating different data centers)
+    shards = [
+        ShardNode("shard-us-east-1", "db1.us-east.example.com", 5432, weight=2),
+        ShardNode("shard-us-west-1", "db1.us-west.example.com", 5432, weight=2),
+        ShardNode("shard-eu-west-1", "db1.eu-west.example.com", 5432, weight=1),
+        ShardNode("shard-ap-south-1", "db1.ap-south.example.com", 5432, weight=1),
+    ]
+    
+    # Add shards to the ring
+    for shard in shards:
+        shard_manager.add_shard(shard)
+    
+    # Demonstrate key distribution
+    test_users = [f"user_{i}" for i in range(1, 11)]
+    
+    print("\n=== User to Shard Mapping ===")
+    for user_id in test_users:
+        primary_shard = shard_manager.get_shard_for_key(user_id)
+        replica_shards = shard_manager.get_replica_shards(user_id)
+        
+        print(f"{user_id} -> Primary: {primary_shard.node_id}")
+        print(f"  Replicas: {[s.node_id for s in replica_shards]}")
+    
+    # Show distribution statistics
+    print("\n=== Distribution Statistics ===")
+    stats = shard_manager.get_distribution_stats()
+    print(json.dumps(stats, indent=2))
+```
+
+---
+
+## 4. JSON Schema for User Profile Object
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UserProfile",
+  "description": "Comprehensive user profile schema for video streaming platform",
+  "type": "object",
+  "required": ["user_id", "email", "created_at", "subscription"],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the user",
+      "example": "550e8400-e29b-41d4-a716-446655440000"
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "description": "User's primary email address",
+      "example": "user@example.com"
+    },
+    "username": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 30,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "description": "Unique username for the account"
+    },
+    "profile_name": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "Display name for the user"
+    },
+    "phone": {
+      "type": "string",
+      "pattern": "^\\+[1-9]\\d{1,14}$",
+      "description": "Phone number in E.164 format",
+      "example": "+14155552671"
+    },
+    "date_of_birth": {
+      "type": "string",
+      "format": "date",
+      "description": "User's date of birth (YYYY-MM-DD)"
+    },
+    "country": {
+      "type": "string",
+      "pattern": "^[A-Z]{2}$",
+      "description": "ISO 3166-1 alpha-2 country code",
+      "example": "US"
+    },
+    "language_preference": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+      "description": "Preferred language (ISO 639-1)",
+      "example": "en-US"
+    },
+    "subscription": {
+      "type": "object",
+      "required": ["tier", "status", "start_date"],
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": ["basic", "standard", "premium", "free_trial"],
+          "description": "Subscription tier"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "cancelled", "suspended", "expired"],
+          "description": "Current subscription status"
+        },
+        "start_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Subscription start timestamp"
+        },
+        "end_date": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Subscription end timestamp (null for ongoing)"
+        },
+        "auto_renew": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether subscription auto-renews"
+        },
+        "payment_method_id": {
+          "type": "string",
+          "description": "Reference to payment method"
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "Sub-profiles under this account (for family sharing)",
+      "items": {
+        "type": "object",
+        "required": ["profile_id", "name"],
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "avatar_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "is_kids": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether this is a kids profile with content restrictions"
+          },
+          "maturity_level": {
+            "type": "string",
+            "enum": ["G", "PG", "PG-13", "R", "NC-17", "all"],
+            "description": "Maximum content maturity level allowed"
+          }
+        }
+      }
+    },
+    "preferences": {
+      "type": "object",
+      "properties": {
+        "video_quality": {
+          "type": "string",
+          "enum": ["auto", "low", "medium", "high", "ultra"],
+          "default": "auto"
+        },
+        "autoplay_next": {
+          "type": "boolean",
+          "default": true
+        },
+        "subtitle_language": {
+          "type": ["string", "null"],
+          "pattern": "^[a-z]{2}$"
+        },
+        "audio_language": {
+          "type": ["string", "null"],
+          "pattern": "^[a-z]{2}$"
+        },
+        "email_notifications": {
+          "type": "boolean",
+          "default": true
+        },
+        "push_notifications": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "watch_history": {
+      "type": "array",
+      "maxItems": 100,
+      "description": "Recent watch history (last 100 items)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "content_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "progress_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "my_list": {
+      "type": "array",
+      "description": "User's saved/watchlist items",
+      "items": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Content ID"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Account creation timestamp"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last profile update timestamp"
+    },
+    "last_login_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Last successful login timestamp"
+    },
+    "devices": {
+      "type": "array",
+      "maxItems": 10,
+      "description": "Registered devices for this account",
+      "items": {
+        "type": "object",
+        "properties": {
+          "device_id": {
+            "type": "string"
+          },
+          "device_type": {
+            "type": "string",
+            "enum": ["web", "mobile_ios", "mobile_android", "smart_tv", "game_console", "streaming_device"]
+          },
+          "device_name": {
+            "type": "string"
+          },
+          "last_active": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_trusted": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "parental_controls": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "pin": {
+          "type": "string",
+          "pattern": "^[0-9]{4}$",
+          "description": "4-digit PIN for parental controls"
+        },
+        "restricted_ratings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["R", "NC-17", "TV-MA"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+This architecture provides a production-ready foundation for a global video streaming platform with emphasis on scalability, fault tolerance, and performance optimization. The consistent hashing algorithm ensures efficient data distribution while minimizing rebalancing overhead during cluster changes.
