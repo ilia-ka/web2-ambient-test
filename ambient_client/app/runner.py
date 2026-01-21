@@ -1,10 +1,12 @@
 import os
+from typing import Tuple
 
 from ..config import get_config
 from ..streaming import stream_chat
 from .openai import get_openai_settings
 from .openrouter import get_openrouter_settings
 from .prompt import load_prompt
+from .provider_utils import ProviderSettings
 
 
 def _run_stream(label: str, api_url: str, api_key: str, prompt: str, model: str) -> bool:
@@ -18,6 +20,35 @@ def _run_stream(label: str, api_url: str, api_key: str, prompt: str, model: str)
     return True
 
 
+def _run_provider(settings: ProviderSettings, prompt: str, had_output: bool) -> Tuple[bool, bool]:
+    if not settings.enabled:
+        return True, had_output
+    if not settings.api_key:
+        print(
+            f"Error: {settings.key_env_hint} is not set. Add it to .env or your environment."
+        )
+        return False, had_output
+    if not settings.models:
+        print(
+            f"Error: No {settings.name} models enabled. Set {settings.model_env_hint} "
+            "and enable per-model flags if needed."
+        )
+        return False, had_output
+    for model in settings.models:
+        if had_output:
+            print("")
+        if not _run_stream(
+            f"{settings.name} ({model})",
+            settings.api_url,
+            settings.api_key,
+            prompt,
+            model,
+        ):
+            return False, had_output
+        had_output = True
+    return True, had_output
+
+
 def run() -> None:
     config = get_config()
     if not config:
@@ -28,54 +59,16 @@ def run() -> None:
         return
     model = os.getenv("AMBIENT_MODEL", "zai-org/GLM-4.6")
 
-    ambient_ran = False
+    had_output = False
     if ambient_enabled:
         if not _run_stream("Ambient", api_url, api_key, prompt, model):
             return
-        ambient_ran = True
+        had_output = True
 
-    openai_settings = get_openai_settings()
-    if openai_settings.enabled:
-        if not openai_settings.api_key:
-            print("Error: OPENAI_API_KEY is not set. Add it to .env or your environment.")
-            return
-        if not openai_settings.models:
-            print(
-                "Error: No OpenAI models enabled. Set OPENAI_MODEL or OPENAI_MODELS "
-                "and enable per-model flags if needed."
-            )
-            return
-        for index, model in enumerate(openai_settings.models):
-            if ambient_ran or index > 0:
-                print("")
-            if not _run_stream(
-                f"OpenAI ({model})",
-                openai_settings.api_url,
-                openai_settings.api_key,
-                prompt,
-                model,
-            ):
-                return
+    success, had_output = _run_provider(get_openai_settings(), prompt, had_output)
+    if not success:
+        return
 
-    openrouter_settings = get_openrouter_settings()
-    if openrouter_settings.enabled:
-        if not openrouter_settings.api_key:
-            print("Error: OPENROUTER_API is not set. Add it to .env or your environment.")
-            return
-        if not openrouter_settings.models:
-            print(
-                "Error: No OpenRouter models enabled. Set OPENROUTER_MODEL or "
-                "OPENROUTER_MODELS and enable per-model flags if needed."
-            )
-            return
-        for index, model in enumerate(openrouter_settings.models):
-            if ambient_ran or openai_settings.enabled or index > 0:
-                print("")
-            if not _run_stream(
-                f"OpenRouter ({model})",
-                openrouter_settings.api_url,
-                openrouter_settings.api_key,
-                prompt,
-                model,
-            ):
-                return
+    success, had_output = _run_provider(get_openrouter_settings(), prompt, had_output)
+    if not success:
+        return

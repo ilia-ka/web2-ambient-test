@@ -1,8 +1,20 @@
+from dataclasses import dataclass
 import os
 import re
 from typing import List
 
 from ..utils import is_enabled
+
+
+@dataclass(frozen=True)
+class ProviderSettings:
+    name: str
+    enabled: bool
+    api_url: str
+    api_key: str
+    models: List[str]
+    key_env_hint: str
+    model_env_hint: str
 
 
 def build_chat_completions_url(explicit_url: str, base_url: str, default_url: str) -> str:
@@ -44,3 +56,49 @@ def filter_enabled_models(prefix: str, models: List[str]) -> List[str]:
         if is_enabled(os.getenv(flag_key), default=True):
             enabled_models.append(model)
     return enabled_models
+
+
+def _first_env_value(keys: List[str]) -> str:
+    for key in keys:
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def get_provider_settings(
+    name: str,
+    prefix: str,
+    enabled_env: str,
+    api_url_env: str,
+    base_url_env: str,
+    default_url: str,
+    api_key_envs: List[str],
+    models_env: str,
+    model_env: str,
+    default_model: str,
+) -> ProviderSettings:
+    api_key = _first_env_value(api_key_envs)
+    enabled = is_enabled(os.getenv(enabled_env), default=bool(api_key))
+    api_url = build_chat_completions_url(
+        os.getenv(api_url_env, ""),
+        os.getenv(base_url_env, ""),
+        default_url,
+    )
+    models = parse_models(os.getenv(models_env, "").strip())
+    if not models:
+        model = os.getenv(model_env, default_model).strip()
+        if model:
+            models = [model]
+    models = filter_enabled_models(prefix, models)
+    key_env_hint = " or ".join(api_key_envs)
+    model_env_hint = f"{model_env} or {models_env}"
+    return ProviderSettings(
+        name=name,
+        enabled=enabled,
+        api_url=api_url,
+        api_key=api_key,
+        models=models,
+        key_env_hint=key_env_hint,
+        model_env_hint=model_env_hint,
+    )
