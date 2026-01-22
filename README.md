@@ -18,7 +18,9 @@
 - Run once to capture a receipt: `python .\main.py`
 - Verify a receipt: `python .\verify_receipt.py data\receipt_<...>.json`
 - Simulate a rejection: `python .\verify_receipt.py data\receipt_<...>.json --tamper event`
-- Other tamper modes: `--tamper raw` or `--tamper meta`
+- Other tamper modes:
+  - `--tamper raw` (edits raw SSE payloads; breaks raw_events hash)
+  - `--tamper meta` (edits stored hash metadata; breaks verification)
 - Example output:
 ```
 VERIFIED: hashes match and structure is valid
