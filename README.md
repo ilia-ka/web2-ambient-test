@@ -18,6 +18,17 @@
 - Run once to capture a receipt: `python .\main.py`
 - Verify a receipt: `python .\verify_receipt.py data\receipt_<...>.json`
 - Simulate a rejection: `python .\verify_receipt.py data\receipt_<...>.json --tamper event`
+- Other tamper modes: `--tamper raw` or `--tamper meta`
+- Example output:
+```
+VERIFIED: hashes match and structure is valid
+Guarantees:
+- Detects tampering for fields covered by stored hashes.
+- Confirms basic structure and event counts.
+Does not guarantee:
+- Origin/authenticity (no signatures).
+- That the model actually ran or output is correct.
+```
 - Guarantees:
   - Detects tampering for fields covered by stored hashes.
   - Confirms basic structure and event counts.
