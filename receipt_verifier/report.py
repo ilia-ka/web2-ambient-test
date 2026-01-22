@@ -23,13 +23,14 @@ def build_report(result: VerificationResult) -> List[str]:
     verdict = "VERIFIED" if result.ok else "REJECTED"
     color = "green" if result.ok else "red"
     verdict = _colorize(verdict, color)
+    lines = [verdict]
     if result.expected is not None and result.actual is not None:
         expected = _colorize(str(result.expected), "green")
         actual = _colorize(str(result.actual), "red")
-        header = f"{verdict}: {result.reason} (expected={expected}, actual={actual})"
+        reason = f"{result.reason} (expected={expected}, actual={actual})"
     else:
-        header = f"{verdict}: {result.reason}"
-    lines = [header]
+        reason = result.reason
+    lines.append(f"Reason: {reason}")
     lines.append("Guarantees:")
     lines.append("- Detects tampering for fields covered by stored hashes.")
     lines.append("- Confirms basic structure and event counts.")

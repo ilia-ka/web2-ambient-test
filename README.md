@@ -28,7 +28,8 @@
   - Any change in events/raw payloads flips the hash and causes REJECTED.
 - Example output (verified):
 ```
-VERIFIED: hashes match and structure is valid
+VERIFIED
+Reason: hashes match and structure is valid
 Guarantees:
 - Detects tampering for fields covered by stored hashes.
 - Confirms basic structure and event counts.
@@ -38,7 +39,8 @@ Does not guarantee:
 ```
 - Example output (tampered):
 ```
-REJECTED: events_sha256 mismatch (expected=..., actual=...)
+REJECTED
+Reason: events_sha256 mismatch (expected=..., actual=...)
 Guarantees:
 - Detects tampering for fields covered by stored hashes.
 - Confirms basic structure and event counts.
@@ -46,12 +48,6 @@ Does not guarantee:
 - Origin/authenticity (no signatures).
 - That the model actually ran or output is correct.
 ```
-- Guarantees:
-  - Detects tampering for fields covered by stored hashes.
-  - Confirms basic structure and event counts.
-- Does not guarantee:
-  - Origin/authenticity (no signatures).
-  - That the model actually ran or output is correct.
 
 ## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
