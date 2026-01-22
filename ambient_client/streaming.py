@@ -1,9 +1,17 @@
+from dataclasses import dataclass
 import json
 import sys
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 import requests
+
+
+@dataclass(frozen=True)
+class StreamResult:
+    text: str
+    ttfb_seconds: float
+    ttc_seconds: float
 
 
 def _safe_write(text: str) -> None:
@@ -16,12 +24,31 @@ def _safe_write(text: str) -> None:
         sys.stdout.flush()
 
 
+def _extract_content(event: object) -> Optional[str]:
+    if not isinstance(event, dict):
+        return None
+    choices = event.get("choices")
+    if choices:
+        choice = choices[0]
+        delta = choice.get("delta") or choice.get("message") or {}
+        if isinstance(delta, dict):
+            content = delta.get("content")
+            if isinstance(content, str):
+                return content
+        elif isinstance(delta, str):
+            return delta
+    content = event.get("content")
+    if isinstance(content, str):
+        return content
+    return None
+
+
 def stream_chat(
     api_url: str,
     api_key: str,
     prompt: str,
     model: str = "zai-org/GLM-4.6",
-) -> Optional[Tuple[str, float, float]]:
+) -> Optional[StreamResult]:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -59,18 +86,7 @@ def stream_chat(
                     event = json.loads(data)
                 except json.JSONDecodeError:
                     continue
-                content = None
-                if isinstance(event, dict):
-                    choices = event.get("choices")
-                    if choices:
-                        choice = choices[0]
-                        delta = choice.get("delta") or choice.get("message") or {}
-                        if isinstance(delta, dict):
-                            content = delta.get("content")
-                        elif isinstance(delta, str):
-                            content = delta
-                    if content is None:
-                        content = event.get("content")
+                content = _extract_content(event)
                 if not content:
                     continue
                 if first_token_at is None:
@@ -85,4 +101,8 @@ def stream_chat(
     if first_token_at is None:
         first_token_at = end
     _safe_write("\n")
-    return "".join(chunks), first_token_at - start, end - start
+    return StreamResult(
+        text="".join(chunks),
+        ttfb_seconds=first_token_at - start,
+        ttc_seconds=end - start,
+    )

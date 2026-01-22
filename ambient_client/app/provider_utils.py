@@ -16,6 +16,19 @@ class ProviderSettings:
     key_env_hint: str
     model_env_hint: str
 
+    def validation_error(self) -> Optional[str]:
+        if not self.api_key:
+            return (
+                f"Error: {self.key_env_hint} is not set. "
+                "Add it to .env or your environment."
+            )
+        if not self.models:
+            return (
+                f"Error: No {self.name} models enabled. Set {self.model_env_hint} "
+                "and enable per-model flags if needed."
+            )
+        return None
+
 
 def build_chat_completions_url(explicit_url: str, base_url: str, default_url: str) -> str:
     explicit_url = explicit_url.strip()
@@ -37,7 +50,7 @@ def parse_models(raw_models: str) -> List[str]:
     models: List[str] = []
     for chunk in raw_models.replace("\n", ",").split(","):
         model = chunk.strip()
-        if model:
+        if model and model not in models:
             models.append(model)
     return models
 

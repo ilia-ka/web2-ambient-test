@@ -14,25 +14,17 @@ def _run_stream(label: str, api_url: str, api_key: str, prompt: str, model: str)
     result = stream_chat(api_url, api_key, prompt, model)
     if not result:
         return False
-    _, ttfb, ttc = result
-    print(f"Time to first token: {ttfb * 1000:.0f} ms")
-    print(f"Time to completion: {ttc * 1000:.0f} ms")
+    print(f"Time to first token: {result.ttfb_seconds * 1000:.0f} ms")
+    print(f"Time to completion: {result.ttc_seconds * 1000:.0f} ms")
     return True
 
 
 def _run_provider(settings: ProviderSettings, prompt: str, had_output: bool) -> Tuple[bool, bool]:
     if not settings.enabled:
         return True, had_output
-    if not settings.api_key:
-        print(
-            f"Error: {settings.key_env_hint} is not set. Add it to .env or your environment."
-        )
-        return False, had_output
-    if not settings.models:
-        print(
-            f"Error: No {settings.name} models enabled. Set {settings.model_env_hint} "
-            "and enable per-model flags if needed."
-        )
+    error = settings.validation_error()
+    if error:
+        print(error)
         return False, had_output
     for model in settings.models:
         if had_output:
