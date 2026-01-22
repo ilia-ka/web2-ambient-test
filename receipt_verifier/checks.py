@@ -1,21 +1,10 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple, cast
 
 from receipt_verifier.hashes import sha256_json
+from receipt_verifier.types import Receipt, ReceiptMeta
 
 
-def _require_dict(value: object, name: str) -> Tuple[bool, str, Dict[str, Any]]:
-    if not isinstance(value, dict):
-        return False, f"{name} is missing or not an object", {}
-    return True, "", value
-
-
-def _require_list(value: object, name: str) -> Tuple[bool, str, List[Any]]:
-    if not isinstance(value, list):
-        return False, f"{name} is missing or not a list", []
-    return True, "", value
-
-
-def _check_counts(meta: Dict[str, Any], events: List[Any], raw_events: List[Any]) -> Tuple[bool, str]:
+def _check_counts(meta: ReceiptMeta, events: List[Any], raw_events: List[Any]) -> Tuple[bool, str]:
     expected_count = meta.get("event_count")
     if expected_count is not None and expected_count != len(events):
         return False, f"event_count mismatch (meta={expected_count}, actual={len(events)})"
@@ -28,7 +17,7 @@ def _check_counts(meta: Dict[str, Any], events: List[Any], raw_events: List[Any]
     return True, ""
 
 
-def _check_hash(meta: Dict[str, Any], key: str, payload: List[Any]) -> Tuple[bool, str]:
+def _check_hash(meta: ReceiptMeta, key: str, payload: List[Any]) -> Tuple[bool, str]:
     expected = meta.get(key)
     if not isinstance(expected, str):
         return False, f"{key} is missing"
@@ -38,20 +27,29 @@ def _check_hash(meta: Dict[str, Any], key: str, payload: List[Any]) -> Tuple[boo
     return True, ""
 
 
+def validate_schema(receipt: object) -> Tuple[bool, str, Receipt]:
+    if not isinstance(receipt, dict):
+        return False, "receipt is not a JSON object", {}
+    meta = receipt.get("meta")
+    events = receipt.get("events")
+    raw_events = receipt.get("raw_events")
+    if not isinstance(meta, dict):
+        return False, "meta is missing or not an object", {}
+    if not isinstance(events, list):
+        return False, "events is missing or not a list", {}
+    if not isinstance(raw_events, list):
+        return False, "raw_events is missing or not a list", {}
+    return True, "", cast(Receipt, receipt)
+
+
 def verify_receipt(receipt: object) -> Tuple[bool, str]:
-    ok, reason, receipt_dict = _require_dict(receipt, "receipt")
+    ok, reason, parsed = validate_schema(receipt)
     if not ok:
         return False, reason
 
-    ok, reason, meta = _require_dict(receipt_dict.get("meta"), "meta")
-    if not ok:
-        return False, reason
-    ok, reason, events = _require_list(receipt_dict.get("events"), "events")
-    if not ok:
-        return False, reason
-    ok, reason, raw_events = _require_list(receipt_dict.get("raw_events"), "raw_events")
-    if not ok:
-        return False, reason
+    meta = parsed["meta"]
+    events = parsed["events"]
+    raw_events = parsed["raw_events"]
 
     ok, reason = _check_counts(meta, events, raw_events)
     if not ok:
