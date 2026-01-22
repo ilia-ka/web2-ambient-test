@@ -14,13 +14,18 @@
 - Providers: Ambient, OpenRouter
 - Models: `zai-org/GLM-4.6`, `openai/gpt-5.2`, `deepseek/deepseek-v3.2`, `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4.5`
 
-## Receipt Verification (Micro-Challenge #3)
+## Web2 Developer Loop — Micro-Challenge #3 (Receipt Verification)
 - Run once to capture a receipt: `python .\main.py`
 - Verify a receipt: `python .\verify_receipt.py data\receipt_<...>.json`
 - Simulate a rejection: `python .\verify_receipt.py data\receipt_<...>.json --tamper event`
 - Other tamper modes:
   - `--tamper raw` (edits raw SSE payloads; breaks raw_events hash)
   - `--tamper meta` (edits stored hash metadata; breaks verification)
+- How it works:
+  - The stream writes a receipt with `events` and `raw_events`.
+  - The receipt stores `events_sha256` and `raw_events_sha256` in `meta`.
+  - The verifier recomputes those hashes and compares them.
+  - Any change in events/raw payloads flips the hash and causes REJECTED.
 - Example output:
 ```
 VERIFIED: hashes match and structure is valid
@@ -38,7 +43,7 @@ Does not guarantee:
   - Origin/authenticity (no signatures).
   - That the model actually ran or output is correct.
 
-## Results
+## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
 - OpenRouter (openai/gpt-5.2): TTFT 7570 ms, TTC 63078 ms (completed).
 - OpenRouter (deepseek/deepseek-v3.2): TTFT 5489 ms, TTC 184746 ms (completed).
