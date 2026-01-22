@@ -1,4 +1,4 @@
-# Streaming Report (Ambient + OpenRouter)
+# Web2 Weekly Challenges — Ambient
 
 ## Configuration
 - Install dependency: `python -m pip install requests`
@@ -60,6 +60,6 @@ Does not guarantee:
 - OpenRouter (google/gemini-2.5-flash): TTFT 1173 ms, TTC 31088 ms (completed).
 - OpenRouter (anthropic/claude-sonnet-4.5): TTFT 1926 ms, TTC 77335 ms (completed).
 
-## Notes
+### Notes
 - The prompt is long, so completion time is large.
 - Merkle (Ambient): 06bb924abe7fc1b4675016f3b99da1d98f92876b09e3990988b2e6143bb05e3b
