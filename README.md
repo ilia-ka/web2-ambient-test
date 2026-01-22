@@ -16,8 +16,8 @@
 
 ## Web2 Developer Loop — Micro-Challenge #3 (Receipt Verification)
 - Run once to capture a receipt: `python .\main.py`
-- Verify a receipt: `python .\verify_receipt.py data\receipt_<...>.json`
-- Simulate a rejection: `python .\verify_receipt.py data\receipt_<...>.json --tamper event`
+- Verify a receipt: `python .\verify.py data\receipt_<...>.json`
+- Simulate a rejection: `python .\verify.py data\receipt_<...>.json --tamper event`
 - Other tamper modes:
   - `--tamper raw` (edits raw SSE payloads; breaks raw_events hash)
   - `--tamper meta` (edits stored hash metadata; breaks verification)
