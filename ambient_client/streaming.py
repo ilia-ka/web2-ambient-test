@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 import requests
 
+from shared.hashes import sha256_json
 
 @dataclass(frozen=True)
 class StreamResult:
@@ -69,11 +70,6 @@ def _write_receipt(
     except OSError as exc:
         print(f"Warning: Unable to write receipt: {exc}")
         return None
-
-
-def _sha256_json(value: object) -> str:
-    data = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def stream_chat(
@@ -149,8 +145,8 @@ def stream_chat(
     _safe_write("\n")
     receipt_path = None
     if receipt_dir is not None:
-        events_hash = _sha256_json(events)
-        raw_events_hash = _sha256_json(raw_events)
+        events_hash = sha256_json(events)
+        raw_events_hash = sha256_json(raw_events)
         receipt_payload = {
             "meta": {
                 "label": receipt_label or "stream",

@@ -21,9 +21,9 @@ def main() -> int:
     if args.tamper:
         receipt = tamper(receipt, args.tamper)
 
-    ok, reason = verify(receipt)
-    print_report(ok, reason)
-    return 0 if ok else 1
+    result = verify(receipt)
+    print_report(result)
+    return 0 if result.ok else 1
 
 
 if __name__ == "__main__":

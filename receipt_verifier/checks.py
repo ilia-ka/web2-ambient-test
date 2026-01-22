@@ -1,7 +1,8 @@
 from typing import Any, List, Tuple, cast
 
-from receipt_verifier.hashes import sha256_json
+from receipt_verifier.result import VerificationResult
 from receipt_verifier.types import Receipt, ReceiptMeta
+from shared.hashes import sha256_json
 
 
 def _check_counts(meta: ReceiptMeta, events: List[Any], raw_events: List[Any]) -> Tuple[bool, str]:
@@ -17,14 +18,14 @@ def _check_counts(meta: ReceiptMeta, events: List[Any], raw_events: List[Any]) -
     return True, ""
 
 
-def _check_hash(meta: ReceiptMeta, key: str, payload: List[Any]) -> Tuple[bool, str]:
+def _check_hash(meta: ReceiptMeta, key: str, payload: List[Any]) -> Tuple[bool, str, str, str]:
     expected = meta.get(key)
     if not isinstance(expected, str):
-        return False, f"{key} is missing"
+        return False, f"{key} is missing", "", ""
     actual = sha256_json(payload)
     if expected != actual:
-        return False, f"{key} mismatch (expected={expected}, actual={actual})"
-    return True, ""
+        return False, f"{key} mismatch", expected, actual
+    return True, "", expected, actual
 
 
 def validate_schema(receipt: object) -> Tuple[bool, str, Receipt]:
@@ -42,10 +43,10 @@ def validate_schema(receipt: object) -> Tuple[bool, str, Receipt]:
     return True, "", cast(Receipt, receipt)
 
 
-def verify_receipt(receipt: object) -> Tuple[bool, str]:
+def verify_receipt(receipt: object) -> VerificationResult:
     ok, reason, parsed = validate_schema(receipt)
     if not ok:
-        return False, reason
+        return VerificationResult(ok=False, reason=reason)
 
     meta = parsed["meta"]
     events = parsed["events"]
@@ -53,13 +54,18 @@ def verify_receipt(receipt: object) -> Tuple[bool, str]:
 
     ok, reason = _check_counts(meta, events, raw_events)
     if not ok:
-        return False, reason
+        return VerificationResult(ok=False, reason=reason)
 
-    ok, reason = _check_hash(meta, "events_sha256", events)
-    if not ok:
-        return False, reason
-    ok, reason = _check_hash(meta, "raw_events_sha256", raw_events)
-    if not ok:
-        return False, reason
+    for key, payload in (("events_sha256", events), ("raw_events_sha256", raw_events)):
+        ok, reason, expected, actual = _check_hash(meta, key, payload)
+        if not ok:
+            if expected and actual:
+                return VerificationResult(
+                    ok=False,
+                    reason=reason,
+                    expected=expected,
+                    actual=actual,
+                )
+            return VerificationResult(ok=False, reason=reason)
 
-    return True, "hashes match and structure is valid"
+    return VerificationResult(ok=True, reason="hashes match and structure is valid")
