@@ -1,8 +1,12 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import json
+from pathlib import Path
+import re
 import sys
 import time
-from typing import Optional
+from typing import Dict, List, Optional
 
 import requests
 
@@ -12,6 +16,7 @@ class StreamResult:
     text: str
     ttfb_seconds: float
     ttc_seconds: float
+    receipt_path: Optional[str] = None
 
 
 def _safe_write(text: str) -> None:
@@ -43,11 +48,41 @@ def _extract_content(event: object) -> Optional[str]:
     return None
 
 
+def _safe_slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_")
+
+
+def _write_receipt(
+    receipt_dir: Path,
+    label: str,
+    model: str,
+    payload: Dict[str, object],
+) -> Optional[str]:
+    try:
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        label_slug = _safe_slug(label) or "stream"
+        model_slug = _safe_slug(model) or "model"
+        path = receipt_dir / f"receipt_{timestamp}_{label_slug}_{model_slug}.json"
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        return str(path)
+    except OSError as exc:
+        print(f"Warning: Unable to write receipt: {exc}")
+        return None
+
+
+def _sha256_json(value: object) -> str:
+    data = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
 def stream_chat(
     api_url: str,
     api_key: str,
     prompt: str,
     model: str = "zai-org/GLM-4.6",
+    receipt_dir: Optional[Path] = None,
+    receipt_label: str = "",
 ) -> Optional[StreamResult]:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -61,8 +96,14 @@ def stream_chat(
     }
 
     start = time.perf_counter()
+    started_at = datetime.now(timezone.utc).isoformat()
     first_token_at = None
     chunks = []
+    events: List[Dict[str, object]] = []
+    raw_events: List[str] = []
+    parse_errors = 0
+    if receipt_dir is not None:
+        receipt_dir = Path(receipt_dir)
 
     try:
         with requests.post(
@@ -80,12 +121,17 @@ def stream_chat(
                 if not line.startswith("data:"):
                     continue
                 data = line[len("data:"):].strip()
+                if receipt_dir is not None:
+                    raw_events.append(data)
                 if data == "[DONE]":
                     break
                 try:
                     event = json.loads(data)
                 except json.JSONDecodeError:
+                    parse_errors += 1
                     continue
+                if receipt_dir is not None and isinstance(event, dict):
+                    events.append(event)
                 content = _extract_content(event)
                 if not content:
                     continue
@@ -101,8 +147,32 @@ def stream_chat(
     if first_token_at is None:
         first_token_at = end
     _safe_write("\n")
+    receipt_path = None
+    if receipt_dir is not None:
+        events_hash = _sha256_json(events)
+        raw_events_hash = _sha256_json(raw_events)
+        receipt_payload = {
+            "meta": {
+                "label": receipt_label or "stream",
+                "model": model,
+                "api_url": api_url,
+                "started_at": started_at,
+                "ttfb_seconds": first_token_at - start,
+                "ttc_seconds": end - start,
+                "event_count": len(events),
+                "raw_event_count": len(raw_events),
+                "parse_errors": parse_errors,
+                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "events_sha256": events_hash,
+                "raw_events_sha256": raw_events_hash,
+            },
+            "events": events,
+            "raw_events": raw_events,
+        }
+        receipt_path = _write_receipt(receipt_dir, receipt_label, model, receipt_payload)
     return StreamResult(
         text="".join(chunks),
         ttfb_seconds=first_token_at - start,
         ttc_seconds=end - start,
+        receipt_path=receipt_path,
     )

@@ -4,6 +4,7 @@
 - Install dependency: `python -m pip install requests`
 - Set `AMBIENT_API_URL` and `AMBIENT_API_KEY` for Ambient (toggle with `AMBIENT_ENABLED`).
 - Use `AMBIENT_MODEL` and `AMBIENT_PROMPT_FILE` to control the request.
+- Receipt capture: set `AMBIENT_RECEIPT_SAVE=1` to save raw stream events to `data/` (configure with `AMBIENT_RECEIPT_DIR`).
 - Optional OpenAI comparison: set `OPENAI_ENABLED=1`, `OPENAI_API_KEY`, and either `OPENAI_MODEL` or `OPENAI_MODELS`. You can toggle each model with `OPENAI_MODEL_<NAME>_ENABLED=0/1`.
 - Optional OpenRouter comparison: set `OPENROUTER_ENABLED=1`, `OPENROUTER_API` (or `OPENROUTER_API_KEY`), and `OPENROUTER_MODELS`. You can toggle each model with `OPENROUTER_MODEL_<NAME>_ENABLED=0/1`.
 
@@ -12,6 +13,17 @@
 - Prompt source: `prompt.txt` (AMBIENT_PROMPT_FILE)
 - Providers: Ambient, OpenRouter
 - Models: `zai-org/GLM-4.6`, `openai/gpt-5.2`, `deepseek/deepseek-v3.2`, `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4.5`
+
+## Receipt Verification (Micro-Challenge #3)
+- Run once to capture a receipt: `python .\main.py`
+- Verify a receipt: `python .\verify_receipt.py data\receipt_<...>.json`
+- Simulate a rejection: `python .\verify_receipt.py data\receipt_<...>.json --tamper event`
+- Guarantees:
+  - Detects tampering for fields covered by stored hashes.
+  - Confirms basic structure and event counts.
+- Does not guarantee:
+  - Origin/authenticity (no signatures).
+  - That the model actually ran or output is correct.
 
 ## Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
