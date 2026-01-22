@@ -26,9 +26,19 @@
   - The receipt stores `events_sha256` and `raw_events_sha256` in `meta`.
   - The verifier recomputes those hashes and compares them.
   - Any change in events/raw payloads flips the hash and causes REJECTED.
-- Example output:
+- Example output (verified):
 ```
 VERIFIED: hashes match and structure is valid
+Guarantees:
+- Detects tampering for fields covered by stored hashes.
+- Confirms basic structure and event counts.
+Does not guarantee:
+- Origin/authenticity (no signatures).
+- That the model actually ran or output is correct.
+```
+- Example output (tampered):
+```
+REJECTED: events_sha256 mismatch (expected=..., actual=...)
 Guarantees:
 - Detects tampering for fields covered by stored hashes.
 - Confirms basic structure and event counts.
