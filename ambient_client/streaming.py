@@ -79,6 +79,7 @@ def stream_chat(
     model: str = "zai-org/GLM-4.6",
     receipt_dir: Optional[Path] = None,
     receipt_label: str = "",
+    request_params: Optional[Dict[str, object]] = None,
 ) -> Optional[StreamResult]:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -90,6 +91,10 @@ def stream_chat(
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
     }
+    if request_params:
+        for key, value in request_params.items():
+            if value is not None:
+                payload[key] = value
 
     start = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
