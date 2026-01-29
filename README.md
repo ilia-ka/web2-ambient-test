@@ -49,6 +49,11 @@ Does not guarantee:
 - That the model actually ran or output is correct.
 ```
 
+## Web2 Developer Loop — Micro-Challenge #4 (Activation - Emergent Behavior)
+- Status: in progress.
+- Goal: cost + latency reality check (Ambient vs closed API under the same constraints).
+- Notes: comparison workflow and reproducible reporting will be documented here once implemented.
+
 ## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
 - OpenRouter (openai/gpt-5.2): TTFT 7570 ms, TTC 63078 ms (completed).
