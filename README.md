@@ -61,6 +61,20 @@ Does not guarantee:
 - Report:
   - Generate markdown summary: `python .\report_bench.py data\bench_<timestamp>.jsonl`
   - Or point to a directory: `python .\report_bench.py data`
+- Submission template (English):
+  - Developer Loop (post in 💻│developers):
+    - Bench table (paste output from `report_bench.py`):
+      - Provider vs closed API summary with TTFT/TTC, reliability, stalls, and tokens.
+    - Notes:
+      - Cost: `...` (usage tokens coverage + pricing assumptions if any).
+      - Latency: `...` (p50/p90 and variability).
+      - Reliability: `...` (timeouts/stalls/parse errors).
+      - Tradeoffs: `...` (verification overhead, determinism, ToS risk).
+  - Community Activation (post in 📝│testnet-feedback):
+    - What I tried: `...`
+    - Why it required Ambient: `...`
+    - What worked / didn’t: `...`
+    - Lessons learned: `...`
 
 ## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
