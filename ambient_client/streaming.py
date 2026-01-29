@@ -47,8 +47,11 @@ def _extract_content(event: object) -> Optional[str]:
         delta = choice.get("delta") or choice.get("message") or {}
         if isinstance(delta, dict):
             content = delta.get("content")
-            if isinstance(content, str):
+            if isinstance(content, str) and content != "":
                 return content
+            reasoning = delta.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning != "":
+                return reasoning
         elif isinstance(delta, str):
             return delta
     content = event.get("content")

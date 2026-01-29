@@ -26,6 +26,23 @@
 - Report:
   - Generate markdown summary: `python .\report_bench.py data\bench_<timestamp>.jsonl`
   - Or point to a directory: `python .\report_bench.py data`
+
+### Week 4 Results (2026-01-29)
+Bench + cost summary (latency from data/bench_20260129_142659.jsonl; OpenRouter spend from dashboard, 2 runs today):
+| Provider | Model | Runs | Success | TTFT p50/p90 (ms) | TTC p50/p90 (ms) | Tokens p50 | Cost (USD) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Ambient | zai-org/GLM-4.6 | 3 | 3/3 (100%) | 1189/1368 | 9192/9221 | 577 | 0.000550 (est.) |
+| OpenRouter | anthropic/claude-sonnet-4.5 | 3 | 3/3 (100%) | 1916/2191 | 6128/6526 | 615 | 0.0393 |
+| OpenRouter | deepseek/deepseek-v3.2 | 3 | 3/3 (100%) | 1410/17852 | 15285/22688 | 478 | 0.00229 |
+| OpenRouter | google/gemini-3-flash-preview | 3 | 3/3 (100%) | 2770/2774 | 3859/4213 | 601 | 0.00654 |
+| OpenRouter | openai/gpt-5.2 | 3 | 3/3 (100%) | 5624/5970 | 5905/6188 | 575 | 0.0331 |
+
+Notes:
+- All providers: 3/3 success, no stalls.
+- DeepSeek showed high variance (TTFT/TTC p90 spikes).
+- Ambient streamed reasoning_content; counts reflect streamed reasoning output.
+- Ambient cost is estimated from testnet pricing ($0.35/M input, $1.71/M output) using p50 tokens.
+- OpenRouter cost uses dashboard totals for today (2 runs); usage tokens are normalized while billing uses native tokens.
 - Submission template (English):
   - Developer Loop (post in 💻│developers):
     - Bench table (paste output from `report_bench.py`):
