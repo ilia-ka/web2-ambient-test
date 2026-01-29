@@ -18,6 +18,14 @@ class StreamResult:
     ttfb_seconds: float
     ttc_seconds: float
     receipt_path: Optional[str] = None
+    output_chars: int = 0
+    parse_errors: int = 0
+    stall_count: int = 0
+    stall_max_gap_seconds: float = 0.0
+    usage: Optional[Dict[str, object]] = None
+    error: Optional[str] = None
+    status_code: Optional[int] = None
+    started_at: Optional[str] = None
 
 
 def _safe_write(text: str) -> None:
@@ -80,7 +88,8 @@ def stream_chat(
     receipt_dir: Optional[Path] = None,
     receipt_label: str = "",
     request_params: Optional[Dict[str, object]] = None,
-) -> Optional[StreamResult]:
+    stall_threshold_seconds: Optional[float] = None,
+) -> StreamResult:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -99,10 +108,16 @@ def stream_chat(
     start = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
     first_token_at = None
+    last_token_at = None
+    stall_count = 0
+    stall_max_gap = 0.0
     chunks = []
     events: List[Dict[str, object]] = []
     raw_events: List[str] = []
     parse_errors = 0
+    output_chars = 0
+    usage: Optional[Dict[str, object]] = None
+    status_code: Optional[int] = None
     if receipt_dir is not None:
         receipt_dir = Path(receipt_dir)
 
@@ -114,6 +129,7 @@ def stream_chat(
             stream=True,
             timeout=60,
         ) as response:
+            status_code = response.status_code
             response.raise_for_status()
             for raw_line in response.iter_lines(decode_unicode=True):
                 if not raw_line:
@@ -133,16 +149,58 @@ def stream_chat(
                     continue
                 if receipt_dir is not None and isinstance(event, dict):
                     events.append(event)
+                if isinstance(event, dict):
+                    event_usage = event.get("usage")
+                    if isinstance(event_usage, dict):
+                        usage = event_usage
+                    else:
+                        choices = event.get("choices")
+                        if choices:
+                            choice = choices[0]
+                            if isinstance(choice, dict):
+                                choice_usage = choice.get("usage")
+                                if isinstance(choice_usage, dict):
+                                    usage = choice_usage
                 content = _extract_content(event)
                 if not content:
                     continue
+                now = time.perf_counter()
                 if first_token_at is None:
-                    first_token_at = time.perf_counter()
+                    first_token_at = now
+                if last_token_at is not None:
+                    gap = now - last_token_at
+                    if gap > stall_max_gap:
+                        stall_max_gap = gap
+                    if stall_threshold_seconds is not None and gap >= stall_threshold_seconds:
+                        stall_count += 1
+                last_token_at = now
                 chunks.append(content)
+                output_chars += len(content)
                 _safe_write(content)
     except requests.RequestException as exc:
-        print(f"Error: {exc}")
-        return None
+        error = str(exc)
+        response = getattr(exc, "response", None)
+        if response is not None:
+            status_code = response.status_code
+        print(f"Error: {error}")
+        end = time.perf_counter()
+        if first_token_at is None:
+            first_token_at = end
+        _safe_write("\n")
+        return StreamResult(
+            text="".join(chunks),
+            ttfb_seconds=first_token_at - start,
+            ttc_seconds=end - start,
+            receipt_path=None,
+            output_chars=output_chars,
+            parse_errors=parse_errors,
+            stall_count=stall_count,
+            stall_max_gap_seconds=stall_max_gap,
+            usage=usage,
+            error=error,
+            status_code=status_code,
+            started_at=started_at,
+        )
 
     end = time.perf_counter()
     if first_token_at is None:
@@ -176,4 +234,11 @@ def stream_chat(
         ttfb_seconds=first_token_at - start,
         ttc_seconds=end - start,
         receipt_path=receipt_path,
+        output_chars=output_chars,
+        parse_errors=parse_errors,
+        stall_count=stall_count,
+        stall_max_gap_seconds=stall_max_gap,
+        usage=usage,
+        status_code=status_code,
+        started_at=started_at,
     )

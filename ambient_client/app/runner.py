@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -46,6 +48,10 @@ def _float_env(key: str, default: Optional[float] = None) -> Optional[float]:
         return default
 
 
+def _bool_env(key: str, default: bool = False) -> bool:
+    return is_enabled(os.getenv(key), default=default)
+
+
 def _parse_stop_sequences(raw: str) -> Optional[List[str]]:
     raw = raw.strip()
     if not raw:
@@ -80,6 +86,8 @@ def _load_request_params() -> Dict[str, object]:
     stop = _parse_stop_sequences(os.getenv("REQUEST_STOP", ""))
     if stop:
         params["stop"] = stop
+    if _bool_env("REQUEST_STREAM_INCLUDE_USAGE", default=False):
+        params["stream_options"] = {"include_usage": True}
     return params
 
 
@@ -98,6 +106,25 @@ def _bench_settings() -> Tuple[bool, int, int]:
     return True, warmup, runs
 
 
+def _bench_output_path() -> Optional[Path]:
+    dir_value = os.getenv("BENCH_OUTPUT_DIR", "data").strip()
+    if not dir_value:
+        return None
+    bench_dir = Path(dir_value)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return bench_dir / f"bench_{timestamp}.jsonl"
+
+
+def _append_bench_record(path: Path, record: Dict[str, object]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True))
+            handle.write("\n")
+    except OSError as exc:
+        print(f"Warning: Unable to write bench record: {exc}")
+
+
 def _run_stream(
     label: str,
     api_url: str,
@@ -107,6 +134,9 @@ def _run_stream(
     receipt_dir: Optional[Path],
     receipt_label: str,
     request_params: Optional[Dict[str, object]] = None,
+    bench_path: Optional[Path] = None,
+    bench_record: Optional[Dict[str, object]] = None,
+    stall_threshold_seconds: Optional[float] = None,
 ) -> bool:
     print(f"{label} stream:")
     result = stream_chat(
@@ -117,8 +147,30 @@ def _run_stream(
         receipt_dir=receipt_dir,
         receipt_label=receipt_label,
         request_params=request_params,
+        stall_threshold_seconds=stall_threshold_seconds,
     )
-    if not result:
+    success = result.error is None
+    if bench_path is not None and bench_record is not None:
+        record = dict(bench_record)
+        record.update(
+            {
+                "success": success,
+                "ttfb_ms": round(result.ttfb_seconds * 1000, 3),
+                "ttc_ms": round(result.ttc_seconds * 1000, 3),
+                "output_chars": result.output_chars,
+                "stall_count": result.stall_count,
+                "stall_max_gap_ms": round(result.stall_max_gap_seconds * 1000, 3),
+                "parse_errors": result.parse_errors,
+                "usage": result.usage,
+                "error": result.error,
+                "status_code": result.status_code,
+                "started_at": result.started_at,
+            }
+        )
+        if result.receipt_path:
+            record["receipt_path"] = result.receipt_path
+        _append_bench_record(bench_path, record)
+    if not success:
         return False
     print(f"Time to first token: {result.ttfb_seconds * 1000:.0f} ms")
     print(f"Time to completion: {result.ttc_seconds * 1000:.0f} ms")
@@ -135,6 +187,9 @@ def _run_provider(
     bench_enabled: bool,
     bench_warmup: int,
     bench_runs: int,
+    bench_path: Optional[Path],
+    prompt_sha256: str,
+    stall_threshold_seconds: Optional[float],
 ) -> Tuple[bool, bool]:
     if not settings.enabled:
         return True, had_output
@@ -155,6 +210,18 @@ def _run_provider(
                 else:
                     run_number = run_index - bench_warmup + 1
                     label = f"{settings.name} ({model}) run {run_number}/{bench_runs}"
+                bench_record = None
+                if bench_path is not None:
+                    bench_record = {
+                        "type": "run",
+                        "provider": settings.name,
+                        "model": model,
+                        "api_url": settings.api_url,
+                        "prompt_sha256": prompt_sha256,
+                        "warmup": is_warmup,
+                        "run_index": run_index + 1,
+                        "run_total": total_runs,
+                    }
                 if not _run_stream(
                     label,
                     settings.api_url,
@@ -164,12 +231,30 @@ def _run_provider(
                     receipt_dir,
                     settings.name,
                     request_params=request_params,
+                    bench_path=bench_path,
+                    bench_record=bench_record,
+                    stall_threshold_seconds=stall_threshold_seconds,
                 ):
-                    return False, had_output
+                    had_output = True
+                    if not bench_enabled:
+                        return False, had_output
+                    continue
                 had_output = True
         else:
             if had_output:
                 print("")
+            bench_record = None
+            if bench_path is not None:
+                bench_record = {
+                    "type": "run",
+                    "provider": settings.name,
+                    "model": model,
+                    "api_url": settings.api_url,
+                    "prompt_sha256": prompt_sha256,
+                    "warmup": False,
+                    "run_index": 1,
+                    "run_total": 1,
+                }
             if not _run_stream(
                 f"{settings.name} ({model})",
                 settings.api_url,
@@ -179,6 +264,9 @@ def _run_provider(
                 receipt_dir,
                 settings.name,
                 request_params=request_params,
+                bench_path=bench_path,
+                bench_record=bench_record,
+                stall_threshold_seconds=stall_threshold_seconds,
             ):
                 return False, had_output
             had_output = True
@@ -193,8 +281,31 @@ def run() -> None:
 
     request_params = _load_request_params()
     bench_enabled, bench_warmup, bench_runs = _bench_settings()
+    bench_path = None
+    prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    stall_threshold_seconds = None
     if bench_enabled:
         print(f"Bench mode: warmup={bench_warmup}, runs={bench_runs}")
+        bench_path = _bench_output_path()
+        stall_threshold_ms = _int_env("BENCH_STALL_THRESHOLD_MS", default=2000)
+        if stall_threshold_ms is None:
+            stall_threshold_ms = 2000
+        stall_threshold_seconds = stall_threshold_ms / 1000.0
+        if bench_path is not None:
+            meta = {
+                "type": "meta",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "bench": {
+                    "warmup": bench_warmup,
+                    "runs": bench_runs,
+                    "stall_threshold_ms": stall_threshold_ms,
+                },
+                "prompt_sha256": prompt_sha256,
+                "prompt_file": os.getenv("AMBIENT_PROMPT_FILE", "").strip() or None,
+                "request_params": request_params,
+            }
+            _append_bench_record(bench_path, meta)
+            print(f"Bench output: {bench_path}")
     had_output = False
     for settings in (
         get_ambient_settings(),
@@ -209,6 +320,9 @@ def run() -> None:
             bench_enabled,
             bench_warmup,
             bench_runs,
+            bench_path,
+            prompt_sha256,
+            stall_threshold_seconds,
         )
         if not success:
             return

@@ -52,7 +52,12 @@ Does not guarantee:
 ## Web2 Developer Loop — Micro-Challenge #4 (Activation - Emergent Behavior)
 - Status: in progress.
 - Goal: cost + latency reality check (Ambient vs closed API under the same constraints).
-- Notes: comparison workflow and reproducible reporting will be documented here once implemented.
+- Bench mode (reproducible runs):
+  - Enable: `BENCH_ENABLED=1` (optional `BENCH_WARMUP`, `BENCH_RUNS`).
+  - Output: `data/bench_<timestamp>.jsonl` (override with `BENCH_OUTPUT_DIR`).
+  - Stall detection: `BENCH_STALL_THRESHOLD_MS` (default 2000 ms).
+  - Shared request params: `REQUEST_TEMPERATURE`, `REQUEST_MAX_TOKENS`, `REQUEST_TOP_P`, `REQUEST_SEED`, `REQUEST_STOP`.
+  - Usage in stream (if supported): `REQUEST_STREAM_INCLUDE_USAGE=1`.
 
 ## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
