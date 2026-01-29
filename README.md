@@ -58,6 +58,9 @@ Does not guarantee:
   - Stall detection: `BENCH_STALL_THRESHOLD_MS` (default 2000 ms).
   - Shared request params: `REQUEST_TEMPERATURE`, `REQUEST_MAX_TOKENS`, `REQUEST_TOP_P`, `REQUEST_SEED`, `REQUEST_STOP`.
   - Usage in stream (if supported): `REQUEST_STREAM_INCLUDE_USAGE=1`.
+- Report:
+  - Generate markdown summary: `python .\report_bench.py data\bench_<timestamp>.jsonl`
+  - Or point to a directory: `python .\report_bench.py data`
 
 ## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
