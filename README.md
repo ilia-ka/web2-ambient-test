@@ -12,7 +12,7 @@
 - Command: `python .\main.py`
 - Prompt source: `prompt.txt` (AMBIENT_PROMPT_FILE)
 - Providers: Ambient, OpenRouter
-- Models: `zai-org/GLM-4.6`, `openai/gpt-5.2`, `deepseek/deepseek-v3.2`, `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4.5`
+- Models: `zai-org/GLM-4.6`, `openai/gpt-5.2`, `deepseek/deepseek-v3.2`, `google/gemini-3-flash-preview`, `anthropic/claude-sonnet-4.5`
 
 ## Web2 Developer Loop — Micro-Challenge #4 (Activation - Emergent Behavior)
 - Status: in progress.
