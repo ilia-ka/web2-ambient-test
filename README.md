@@ -1,18 +1,31 @@
 # Web2 Weekly Challenges — Ambient
 
-## Configuration
-- Install dependency: `python -m pip install requests`
-- Set `AMBIENT_API_URL` and `AMBIENT_API_KEY` for Ambient (toggle with `AMBIENT_ENABLED`).
-- Use `AMBIENT_MODEL` and `AMBIENT_PROMPT_FILE` to control the request.
-- Receipt capture: set `AMBIENT_RECEIPT_SAVE=1` to save raw stream events to `data/` (configure with `AMBIENT_RECEIPT_DIR`).
-- Optional OpenAI comparison: set `OPENAI_ENABLED=1`, `OPENAI_API_KEY`, and either `OPENAI_MODEL` or `OPENAI_MODELS`. You can toggle each model with `OPENAI_MODEL_<NAME>_ENABLED=0/1`.
-- Optional OpenRouter comparison: set `OPENROUTER_ENABLED=1`, `OPENROUTER_API` (or `OPENROUTER_API_KEY`), and `OPENROUTER_MODELS`. You can toggle each model with `OPENROUTER_MODEL_<NAME>_ENABLED=0/1`.
-
-## Run Context
-- Command: `python .\main.py`
-- Prompt source: `prompt.txt` (AMBIENT_PROMPT_FILE)
-- Providers: Ambient, OpenRouter
-- Models: `zai-org/GLM-4.6`, `openai/gpt-5.2`, `deepseek/deepseek-v3.2`, `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4.5`
+## Web2 Developer Loop — Micro-Challenge #4 (Activation - Emergent Behavior)
+- Status: in progress.
+- Goal: cost + latency reality check (Ambient vs closed API under the same constraints).
+- Bench mode (reproducible runs):
+  - Enable: `BENCH_ENABLED=1` (optional `BENCH_WARMUP`, `BENCH_RUNS`).
+  - Output: `data/bench_<timestamp>.jsonl` (override with `BENCH_OUTPUT_DIR`).
+  - Stall detection: `BENCH_STALL_THRESHOLD_MS` (default 2000 ms).
+  - Shared request params: `REQUEST_TEMPERATURE`, `REQUEST_MAX_TOKENS`, `REQUEST_TOP_P`, `REQUEST_SEED`, `REQUEST_STOP`.
+  - Usage in stream (if supported): `REQUEST_STREAM_INCLUDE_USAGE=1`.
+- Report:
+  - Generate markdown summary: `python .\report_bench.py data\bench_<timestamp>.jsonl`
+  - Or point to a directory: `python .\report_bench.py data`
+- Submission template (English):
+  - Developer Loop (post in 💻│developers):
+    - Bench table (paste output from `report_bench.py`):
+      - Provider vs closed API summary with TTFT/TTC, reliability, stalls, and tokens.
+    - Notes:
+      - Cost: `...` (usage tokens coverage + pricing assumptions if any).
+      - Latency: `...` (p50/p90 and variability).
+      - Reliability: `...` (timeouts/stalls/parse errors).
+      - Tradeoffs: `...` (verification overhead, determinism, ToS risk).
+  - Community Activation (post in 📝│testnet-feedback):
+    - What I tried: `...`
+    - Why it required Ambient: `...`
+    - What worked / didn’t: `...`
+    - Lessons learned: `...`
 
 ## Web2 Developer Loop — Micro-Challenge #3 (Receipt Verification)
 - Run once to capture a receipt: `python .\main.py`
@@ -49,33 +62,6 @@ Does not guarantee:
 - That the model actually ran or output is correct.
 ```
 
-## Web2 Developer Loop — Micro-Challenge #4 (Activation - Emergent Behavior)
-- Status: in progress.
-- Goal: cost + latency reality check (Ambient vs closed API under the same constraints).
-- Bench mode (reproducible runs):
-  - Enable: `BENCH_ENABLED=1` (optional `BENCH_WARMUP`, `BENCH_RUNS`).
-  - Output: `data/bench_<timestamp>.jsonl` (override with `BENCH_OUTPUT_DIR`).
-  - Stall detection: `BENCH_STALL_THRESHOLD_MS` (default 2000 ms).
-  - Shared request params: `REQUEST_TEMPERATURE`, `REQUEST_MAX_TOKENS`, `REQUEST_TOP_P`, `REQUEST_SEED`, `REQUEST_STOP`.
-  - Usage in stream (if supported): `REQUEST_STREAM_INCLUDE_USAGE=1`.
-- Report:
-  - Generate markdown summary: `python .\report_bench.py data\bench_<timestamp>.jsonl`
-  - Or point to a directory: `python .\report_bench.py data`
-- Submission template (English):
-  - Developer Loop (post in 💻│developers):
-    - Bench table (paste output from `report_bench.py`):
-      - Provider vs closed API summary with TTFT/TTC, reliability, stalls, and tokens.
-    - Notes:
-      - Cost: `...` (usage tokens coverage + pricing assumptions if any).
-      - Latency: `...` (p50/p90 and variability).
-      - Reliability: `...` (timeouts/stalls/parse errors).
-      - Tradeoffs: `...` (verification overhead, determinism, ToS risk).
-  - Community Activation (post in 📝│testnet-feedback):
-    - What I tried: `...`
-    - Why it required Ambient: `...`
-    - What worked / didn’t: `...`
-    - Lessons learned: `...`
-
 ## Web2 Developer Loop — Micro-Challenge #2 Results
 - Ambient (zai-org/GLM-4.6): TTFT 2608 ms, TTC 259047 ms (completed).
 - OpenRouter (openai/gpt-5.2): TTFT 7570 ms, TTC 63078 ms (completed).
@@ -86,3 +72,17 @@ Does not guarantee:
 ### Notes
 - The prompt is long, so completion time is large.
 - Merkle (Ambient): 06bb924abe7fc1b4675016f3b99da1d98f92876b09e3990988b2e6143bb05e3b
+
+## Configuration
+- Install dependency: `python -m pip install requests`
+- Set `AMBIENT_API_URL` and `AMBIENT_API_KEY` for Ambient (toggle with `AMBIENT_ENABLED`).
+- Use `AMBIENT_MODEL` and `AMBIENT_PROMPT_FILE` to control the request.
+- Receipt capture: set `AMBIENT_RECEIPT_SAVE=1` to save raw stream events to `data/` (configure with `AMBIENT_RECEIPT_DIR`).
+- Optional OpenAI comparison: set `OPENAI_ENABLED=1`, `OPENAI_API_KEY`, and either `OPENAI_MODEL` or `OPENAI_MODELS`. You can toggle each model with `OPENAI_MODEL_<NAME>_ENABLED=0/1`.
+- Optional OpenRouter comparison: set `OPENROUTER_ENABLED=1`, `OPENROUTER_API` (or `OPENROUTER_API_KEY`), and `OPENROUTER_MODELS`. You can toggle each model with `OPENROUTER_MODEL_<NAME>_ENABLED=0/1`.
+
+## Run Context
+- Command: `python .\main.py`
+- Prompt source: `prompt.txt` (AMBIENT_PROMPT_FILE)
+- Providers: Ambient, OpenRouter
+- Models: `zai-org/GLM-4.6`, `openai/gpt-5.2`, `deepseek/deepseek-v3.2`, `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4.5`
