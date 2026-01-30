@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -70,6 +70,71 @@ def _extract_content_parts(event: object) -> Tuple[Optional[str], Optional[str]]
     return None, None
 
 
+def _build_payload(
+    model: str,
+    prompt: str,
+    request_params: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    payload: Dict[str, object] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+    if request_params:
+        for key, value in request_params.items():
+            if value is not None:
+                payload[key] = value
+    return payload
+
+
+def _select_emitted_text(
+    content: Optional[str],
+    reasoning: Optional[str],
+    content_mode: str,
+) -> Optional[str]:
+    if content_mode == "content":
+        return content
+    if content_mode == "reasoning":
+        return reasoning
+    return content or reasoning
+
+
+def _update_usage_from_event(
+    event: object,
+    usage: Optional[Dict[str, object]],
+) -> Optional[Dict[str, object]]:
+    if not isinstance(event, dict):
+        return usage
+    event_usage = event.get("usage")
+    if isinstance(event_usage, dict):
+        return event_usage
+    choices = event.get("choices")
+    if not choices:
+        return usage
+    choice = choices[0]
+    if isinstance(choice, dict):
+        choice_usage = choice.get("usage")
+        if isinstance(choice_usage, dict):
+            return choice_usage
+    return usage
+
+
+def _iter_sse_data(
+    response: requests.Response,
+    raw_events: Optional[List[str]],
+) -> Iterable[str]:
+    for raw_line in response.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:"):].strip()
+        if raw_events is not None:
+            raw_events.append(data)
+        yield data
+
+
 def _safe_slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_")
 
@@ -111,15 +176,7 @@ def stream_chat(
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": True,
-    }
-    if request_params:
-        for key, value in request_params.items():
-            if value is not None:
-                payload[key] = value
+    payload = _build_payload(model, prompt, request_params)
 
     start = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
@@ -151,15 +208,10 @@ def stream_chat(
         ) as response:
             status_code = response.status_code
             response.raise_for_status()
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if not raw_line:
-                    continue
-                line = raw_line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
-                if receipt_dir is not None:
-                    raw_events.append(data)
+            for data in _iter_sse_data(
+                response,
+                raw_events if receipt_dir is not None else None,
+            ):
                 if data == "[DONE]":
                     break
                 try:
@@ -169,29 +221,13 @@ def stream_chat(
                     continue
                 if receipt_dir is not None and isinstance(event, dict):
                     events.append(event)
-                if isinstance(event, dict):
-                    event_usage = event.get("usage")
-                    if isinstance(event_usage, dict):
-                        usage = event_usage
-                    else:
-                        choices = event.get("choices")
-                        if choices:
-                            choice = choices[0]
-                            if isinstance(choice, dict):
-                                choice_usage = choice.get("usage")
-                                if isinstance(choice_usage, dict):
-                                    usage = choice_usage
+                usage = _update_usage_from_event(event, usage)
                 content, reasoning = _extract_content_parts(event)
                 if content:
                     content_chars += len(content)
                 if reasoning:
                     reasoning_chars += len(reasoning)
-                if content_mode == "content":
-                    emitted_text = content
-                elif content_mode == "reasoning":
-                    emitted_text = reasoning
-                else:
-                    emitted_text = content or reasoning
+                emitted_text = _select_emitted_text(content, reasoning, content_mode)
                 if not emitted_text:
                     continue
                 now = time.perf_counter()

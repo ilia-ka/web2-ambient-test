@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,6 +14,26 @@ from .openai import get_openai_settings
 from .openrouter import get_openrouter_settings
 from .prompt import load_prompt
 from .provider_utils import ProviderSettings
+
+@dataclass(frozen=True)
+class EnvConfig:
+    request_params: Dict[str, object]
+    content_mode: str
+    bench_enabled: bool
+    bench_warmup: int
+    bench_runs: int
+    bench_recorder: Optional["BenchRecorder"]
+    prompt_sha256: str
+    stall_threshold_seconds: Optional[float]
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    index: int
+    total: int
+    is_warmup: bool
+    label_suffix: str
+
 
 ALLOWED_REQUEST_PARAMS = {
     "temperature",
@@ -162,6 +183,14 @@ def _append_bench_record(path: Path, record: Dict[str, object]) -> None:
         print(f"Warning: Unable to write bench record: {exc}")
 
 
+class BenchRecorder:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def write(self, record: Dict[str, object]) -> None:
+        _append_bench_record(self.path, record)
+
+
 def _build_bench_meta(
     bench_warmup: int,
     bench_runs: int,
@@ -189,9 +218,7 @@ def _build_bench_record(
     settings: ProviderSettings,
     model: str,
     prompt_sha256: str,
-    is_warmup: bool,
-    run_index: int,
-    run_total: int,
+    run_spec: RunSpec,
 ) -> Dict[str, object]:
     return {
         "type": "run",
@@ -199,10 +226,33 @@ def _build_bench_record(
         "model": model,
         "api_url": settings.api_url,
         "prompt_sha256": prompt_sha256,
-        "warmup": is_warmup,
-        "run_index": run_index,
-        "run_total": run_total,
+        "warmup": run_spec.is_warmup,
+        "run_index": run_spec.index,
+        "run_total": run_spec.total,
     }
+
+
+def _iter_run_specs(bench_enabled: bool, warmup: int, runs: int) -> List[RunSpec]:
+    if not bench_enabled:
+        return [RunSpec(index=1, total=1, is_warmup=False, label_suffix="")]
+    total = warmup + runs
+    specs: List[RunSpec] = []
+    for idx in range(total):
+        is_warmup = idx < warmup
+        if is_warmup:
+            suffix = f" warmup {idx + 1}/{warmup}"
+        else:
+            run_number = idx - warmup + 1
+            suffix = f" run {run_number}/{runs}"
+        specs.append(
+            RunSpec(
+                index=idx + 1,
+                total=total,
+                is_warmup=is_warmup,
+                label_suffix=suffix,
+            )
+        )
+    return specs
 
 
 def _run_stream(
@@ -214,7 +264,7 @@ def _run_stream(
     receipt_dir: Optional[Path],
     receipt_label: str,
     request_params: Optional[Dict[str, object]] = None,
-    bench_path: Optional[Path] = None,
+    bench_recorder: Optional[BenchRecorder] = None,
     bench_record: Optional[Dict[str, object]] = None,
     stall_threshold_seconds: Optional[float] = None,
     content_mode: str = "content_or_reasoning",
@@ -232,7 +282,7 @@ def _run_stream(
         content_mode=content_mode,
     )
     success = result.success
-    if bench_path is not None and bench_record is not None:
+    if bench_recorder is not None and bench_record is not None:
         record = dict(bench_record)
         record.update(
             {
@@ -254,7 +304,7 @@ def _run_stream(
         )
         if result.receipt_path:
             record["receipt_path"] = result.receipt_path
-        _append_bench_record(bench_path, record)
+        bench_recorder.write(record)
     if not success:
         return False
     print(f"Time to first token: {result.ttfb_seconds * 1000:.0f} ms")
@@ -268,14 +318,7 @@ def _run_provider(
     settings: ProviderSettings,
     prompt: str,
     had_output: bool,
-    request_params: Optional[Dict[str, object]],
-    bench_enabled: bool,
-    bench_warmup: int,
-    bench_runs: int,
-    bench_path: Optional[Path],
-    prompt_sha256: str,
-    stall_threshold_seconds: Optional[float],
-    content_mode: str,
+    config: EnvConfig,
 ) -> Tuple[bool, bool]:
     if not settings.enabled:
         return True, had_output
@@ -285,87 +328,46 @@ def _run_provider(
         return False, had_output
     receipt_dir = _receipt_dir_for(settings)
     for model in settings.models:
-        if bench_enabled:
-            total_runs = bench_warmup + bench_runs
-            for run_index in range(total_runs):
-                is_warmup = run_index < bench_warmup
-                if had_output:
-                    print("")
-                if is_warmup:
-                    label = f"{settings.name} ({model}) warmup {run_index + 1}/{bench_warmup}"
-                else:
-                    run_number = run_index - bench_warmup + 1
-                    label = f"{settings.name} ({model}) run {run_number}/{bench_runs}"
-                bench_record = None
-                if bench_path is not None:
-                    bench_record = _build_bench_record(
-                        settings,
-                        model,
-                        prompt_sha256,
-                        is_warmup,
-                        run_index + 1,
-                        total_runs,
-                    )
-                if not _run_stream(
-                    label,
-                    settings.api_url,
-                    settings.api_key,
-                    prompt,
-                    model,
-                    receipt_dir,
-                    settings.name,
-                    request_params=request_params,
-                    bench_path=bench_path,
-                    bench_record=bench_record,
-                    stall_threshold_seconds=stall_threshold_seconds,
-                    content_mode=content_mode,
-                ):
-                    had_output = True
-                    continue
-                had_output = True
-        else:
+        for run_spec in _iter_run_specs(config.bench_enabled, config.bench_warmup, config.bench_runs):
             if had_output:
                 print("")
+            label = f"{settings.name} ({model}){run_spec.label_suffix}"
             bench_record = None
-            if bench_path is not None:
+            if config.bench_recorder is not None:
                 bench_record = _build_bench_record(
                     settings,
                     model,
-                    prompt_sha256,
-                    False,
-                    1,
-                    1,
+                    config.prompt_sha256,
+                    run_spec,
                 )
             if not _run_stream(
-                f"{settings.name} ({model})",
+                label,
                 settings.api_url,
                 settings.api_key,
                 prompt,
                 model,
                 receipt_dir,
                 settings.name,
-                request_params=request_params,
-                bench_path=bench_path,
+                request_params=config.request_params or None,
+                bench_recorder=config.bench_recorder,
                 bench_record=bench_record,
-                stall_threshold_seconds=stall_threshold_seconds,
-                content_mode=content_mode,
+                stall_threshold_seconds=config.stall_threshold_seconds,
+                content_mode=config.content_mode,
             ):
+                had_output = True
+                if config.bench_enabled:
+                    continue
                 return False, had_output
             had_output = True
     return True, had_output
 
 
-def run() -> None:
-    load_env_file()
-    prompt = load_prompt()
-    if prompt is None:
-        return
-
+def _load_env_config(prompt: str) -> EnvConfig:
     request_params = _load_request_params()
     content_mode = _load_content_mode()
     bench_enabled, bench_warmup, bench_runs = _bench_settings()
-    bench_path = None
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    bench_recorder: Optional[BenchRecorder] = None
     stall_threshold_seconds = None
     if bench_enabled:
         print(f"Bench mode: warmup={bench_warmup}, runs={bench_runs}")
@@ -375,6 +377,7 @@ def run() -> None:
             stall_threshold_ms = 2000
         stall_threshold_seconds = stall_threshold_ms / 1000.0
         if bench_path is not None:
+            bench_recorder = BenchRecorder(bench_path)
             meta = _build_bench_meta(
                 bench_warmup,
                 bench_runs,
@@ -383,26 +386,33 @@ def run() -> None:
                 request_params,
                 content_mode,
             )
-            _append_bench_record(bench_path, meta)
+            bench_recorder.write(meta)
             print(f"Bench output: {bench_path}")
+    return EnvConfig(
+        request_params=request_params,
+        content_mode=content_mode,
+        bench_enabled=bench_enabled,
+        bench_warmup=bench_warmup,
+        bench_runs=bench_runs,
+        bench_recorder=bench_recorder,
+        prompt_sha256=prompt_sha256,
+        stall_threshold_seconds=stall_threshold_seconds,
+    )
+
+
+def run() -> None:
+    load_env_file()
+    prompt = load_prompt()
+    if prompt is None:
+        return
+
+    config = _load_env_config(prompt)
     had_output = False
     for settings in (
         get_ambient_settings(),
         get_openai_settings(),
         get_openrouter_settings(),
     ):
-        success, had_output = _run_provider(
-            settings,
-            prompt,
-            had_output,
-            request_params if request_params else None,
-            bench_enabled,
-            bench_warmup,
-            bench_runs,
-            bench_path,
-            prompt_sha256,
-            stall_threshold_seconds,
-            content_mode,
-        )
+        success, had_output = _run_provider(settings, prompt, had_output, config)
         if not success:
             return
