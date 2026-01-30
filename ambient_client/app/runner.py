@@ -10,6 +10,13 @@ from ..config import load_env_file
 from ..streaming import stream_chat
 from ..utils import is_enabled
 from .ambient import get_ambient_settings
+from .bench import (
+    BenchRecorder,
+    attach_result_metrics,
+    build_bench_meta,
+    build_bench_record,
+    iter_run_specs,
+)
 from .openai import get_openai_settings
 from .openrouter import get_openrouter_settings
 from .prompt import load_prompt
@@ -29,13 +36,6 @@ class EnvConfig:
 
 
 @dataclass(frozen=True)
-class RunSpec:
-    index: int
-    total: int
-    is_warmup: bool
-    label_suffix: str
-
-
 ALLOWED_REQUEST_PARAMS = {
     "temperature",
     "max_tokens",
@@ -193,90 +193,6 @@ def _bench_output_path() -> Optional[Path]:
     return bench_dir / f"bench_{timestamp}.jsonl"
 
 
-def _append_bench_record(path: Path, record: Dict[str, object]) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True))
-            handle.write("\n")
-    except OSError as exc:
-        print(f"Warning: Unable to write bench record: {exc}")
-
-
-class BenchRecorder:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-
-    def write(self, record: Dict[str, object]) -> None:
-        _append_bench_record(self.path, record)
-
-
-def _build_bench_meta(
-    bench_warmup: int,
-    bench_runs: int,
-    stall_threshold_ms: int,
-    prompt_sha256: str,
-    request_params: Dict[str, object],
-    content_mode: str,
-    on_error: str,
-) -> Dict[str, object]:
-    return {
-        "type": "meta",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "bench": {
-            "warmup": bench_warmup,
-            "runs": bench_runs,
-            "stall_threshold_ms": stall_threshold_ms,
-        },
-        "prompt_sha256": prompt_sha256,
-        "prompt_file": os.getenv("AMBIENT_PROMPT_FILE", "").strip() or None,
-        "request_params": request_params,
-        "content_mode": content_mode,
-        "on_error": on_error,
-    }
-
-
-def _build_bench_record(
-    settings: ProviderSettings,
-    model: str,
-    prompt_sha256: str,
-    run_spec: RunSpec,
-) -> Dict[str, object]:
-    return {
-        "type": "run",
-        "provider": settings.name,
-        "model": model,
-        "api_url": settings.api_url,
-        "prompt_sha256": prompt_sha256,
-        "warmup": run_spec.is_warmup,
-        "run_index": run_spec.index,
-        "run_total": run_spec.total,
-    }
-
-
-def _iter_run_specs(bench_enabled: bool, warmup: int, runs: int) -> List[RunSpec]:
-    if not bench_enabled:
-        return [RunSpec(index=1, total=1, is_warmup=False, label_suffix="")]
-    total = warmup + runs
-    specs: List[RunSpec] = []
-    for idx in range(total):
-        is_warmup = idx < warmup
-        if is_warmup:
-            suffix = f" warmup {idx + 1}/{warmup}"
-        else:
-            run_number = idx - warmup + 1
-            suffix = f" run {run_number}/{runs}"
-        specs.append(
-            RunSpec(
-                index=idx + 1,
-                total=total,
-                is_warmup=is_warmup,
-                label_suffix=suffix,
-            )
-        )
-    return specs
-
-
 def _run_stream(
     label: str,
     api_url: str,
@@ -305,27 +221,7 @@ def _run_stream(
     )
     success = result.success
     if bench_recorder is not None and bench_record is not None:
-        record = dict(bench_record)
-        record.update(
-            {
-                "success": success,
-                "ttfb_ms": round(result.ttfb_seconds * 1000, 3),
-                "ttc_ms": round(result.ttc_seconds * 1000, 3),
-                "output_chars": result.output_chars,
-                "content_chars": result.content_chars,
-                "reasoning_chars": result.reasoning_chars,
-                "stall_count": result.stall_count,
-                "stall_max_gap_ms": round(result.stall_max_gap_seconds * 1000, 3),
-                "parse_errors": result.parse_errors,
-                "usage": result.usage,
-                "error": result.error,
-                "status_code": result.status_code,
-                "started_at": result.started_at,
-                "content_mode": content_mode,
-            }
-        )
-        if result.receipt_path:
-            record["receipt_path"] = result.receipt_path
+        record = attach_result_metrics(dict(bench_record), result, content_mode)
         bench_recorder.write(record)
     if not success:
         return False
@@ -350,13 +246,13 @@ def _run_provider(
         return False, had_output
     receipt_dir = _receipt_dir_for(settings)
     for model in settings.models:
-        for run_spec in _iter_run_specs(config.bench_enabled, config.bench_warmup, config.bench_runs):
+        for run_spec in iter_run_specs(config.bench_enabled, config.bench_warmup, config.bench_runs):
             if had_output:
                 print("")
             label = f"{settings.name} ({model}){run_spec.label_suffix}"
             bench_record = None
             if config.bench_recorder is not None:
-                bench_record = _build_bench_record(
+                bench_record = build_bench_record(
                     settings,
                     model,
                     config.prompt_sha256,
@@ -401,7 +297,7 @@ def _load_env_config(prompt: str) -> EnvConfig:
         stall_threshold_seconds = stall_threshold_ms / 1000.0
         if bench_path is not None:
             bench_recorder = BenchRecorder(bench_path)
-            meta = _build_bench_meta(
+            meta = build_bench_meta(
                 bench_warmup,
                 bench_runs,
                 stall_threshold_ms,
@@ -409,6 +305,7 @@ def _load_env_config(prompt: str) -> EnvConfig:
                 request_params,
                 content_mode,
                 on_error,
+                os.getenv("AMBIENT_PROMPT_FILE", "").strip() or None,
             )
             bench_recorder.write(meta)
             print(f"Bench output: {bench_path}")
