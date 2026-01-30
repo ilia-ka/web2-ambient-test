@@ -1,9 +1,36 @@
-Act as a Senior Software Architect. Design a scalable microservices architecture for a global video streaming platform like Netflix.
+You are given data. Use ONLY the data below, with no external knowledge.
+Compute the answers and return STRICT JSON (no extra text).
 
-Your response must include:
-1. A high-level textual overview of the system design.
-2. A list of 5 key technologies (bullet points) and why you chose them.
-3. A complex Python code snippet (at least 50 lines) demonstrating a sharding algorithm for the database.
-4. A JSON schema example for a user profile object.
+Tasks:
+1) Compute total_revenue for orders with status=PAID.
+2) Compute average_latency_ms across logs.
+3) List customers with total_spend > 500.
 
-Please ensure the code is heavily commented and the explanation is structured with clear headers.
+Response format:
+{
+  "summary": "<up to 40 words>",
+  "total_revenue": <number>,
+  "average_latency_ms": <number>,
+  "high_value_customers": [{"name": "<string>", "total_spend": <number>}],
+  "notes": ["...", "...", "..."]
+}
+
+DATA:
+ORDERS:
+- A101, status=PAID, amount=120.50
+- A102, status=CANCELED, amount=89.90
+- A103, status=PAID, amount=240.00
+- A104, status=PAID, amount=310.00
+- A105, status=REFUNDED, amount=45.00
+- A106, status=PAID, amount=180.00
+- A107, status=PENDING, amount=75.00
+- A108, status=PAID, amount=210.00
+
+CUSTOMERS (total_spend):
+- Alice: 540
+- Bob: 180
+- Carol: 620
+- Dan: 90
+
+LOGS (latency_ms):
+- 1200, 980, 1540, 1100, 760
