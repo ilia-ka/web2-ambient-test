@@ -14,6 +14,21 @@ from .openrouter import get_openrouter_settings
 from .prompt import load_prompt
 from .provider_utils import ProviderSettings
 
+ALLOWED_REQUEST_PARAMS = {
+    "temperature",
+    "max_tokens",
+    "top_p",
+    "seed",
+    "stop",
+    "stream_options",
+}
+
+ALLOWED_CONTENT_MODES = {
+    "content",
+    "reasoning",
+    "content_or_reasoning",
+}
+
 
 def _receipt_dir_for(settings: ProviderSettings) -> Optional[Path]:
     if settings.name != "Ambient":
@@ -88,7 +103,29 @@ def _load_request_params() -> Dict[str, object]:
         params["stop"] = stop
     if _bool_env("REQUEST_STREAM_INCLUDE_USAGE", default=False):
         params["stream_options"] = {"include_usage": True}
+    return _validate_request_params(params)
+
+
+def _validate_request_params(params: Dict[str, object]) -> Dict[str, object]:
+    unknown = [key for key in params.keys() if key not in ALLOWED_REQUEST_PARAMS]
+    if unknown:
+        for key in sorted(unknown):
+            print(f"Warning: Unsupported request param '{key}' ignored.")
+            params.pop(key, None)
     return params
+
+
+def _load_content_mode() -> str:
+    raw = os.getenv("REQUEST_CONTENT_MODE", "").strip().lower()
+    if not raw:
+        return "content_or_reasoning"
+    if raw not in ALLOWED_CONTENT_MODES:
+        print(
+            "Warning: REQUEST_CONTENT_MODE must be one of "
+            f"{', '.join(sorted(ALLOWED_CONTENT_MODES))}; using content_or_reasoning."
+        )
+        return "content_or_reasoning"
+    return raw
 
 
 def _bench_settings() -> Tuple[bool, int, int]:
@@ -125,6 +162,49 @@ def _append_bench_record(path: Path, record: Dict[str, object]) -> None:
         print(f"Warning: Unable to write bench record: {exc}")
 
 
+def _build_bench_meta(
+    bench_warmup: int,
+    bench_runs: int,
+    stall_threshold_ms: int,
+    prompt_sha256: str,
+    request_params: Dict[str, object],
+    content_mode: str,
+) -> Dict[str, object]:
+    return {
+        "type": "meta",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "bench": {
+            "warmup": bench_warmup,
+            "runs": bench_runs,
+            "stall_threshold_ms": stall_threshold_ms,
+        },
+        "prompt_sha256": prompt_sha256,
+        "prompt_file": os.getenv("AMBIENT_PROMPT_FILE", "").strip() or None,
+        "request_params": request_params,
+        "content_mode": content_mode,
+    }
+
+
+def _build_bench_record(
+    settings: ProviderSettings,
+    model: str,
+    prompt_sha256: str,
+    is_warmup: bool,
+    run_index: int,
+    run_total: int,
+) -> Dict[str, object]:
+    return {
+        "type": "run",
+        "provider": settings.name,
+        "model": model,
+        "api_url": settings.api_url,
+        "prompt_sha256": prompt_sha256,
+        "warmup": is_warmup,
+        "run_index": run_index,
+        "run_total": run_total,
+    }
+
+
 def _run_stream(
     label: str,
     api_url: str,
@@ -137,6 +217,7 @@ def _run_stream(
     bench_path: Optional[Path] = None,
     bench_record: Optional[Dict[str, object]] = None,
     stall_threshold_seconds: Optional[float] = None,
+    content_mode: str = "content_or_reasoning",
 ) -> bool:
     print(f"{label} stream:")
     result = stream_chat(
@@ -148,8 +229,9 @@ def _run_stream(
         receipt_label=receipt_label,
         request_params=request_params,
         stall_threshold_seconds=stall_threshold_seconds,
+        content_mode=content_mode,
     )
-    success = result.error is None
+    success = result.success
     if bench_path is not None and bench_record is not None:
         record = dict(bench_record)
         record.update(
@@ -158,6 +240,8 @@ def _run_stream(
                 "ttfb_ms": round(result.ttfb_seconds * 1000, 3),
                 "ttc_ms": round(result.ttc_seconds * 1000, 3),
                 "output_chars": result.output_chars,
+                "content_chars": result.content_chars,
+                "reasoning_chars": result.reasoning_chars,
                 "stall_count": result.stall_count,
                 "stall_max_gap_ms": round(result.stall_max_gap_seconds * 1000, 3),
                 "parse_errors": result.parse_errors,
@@ -165,6 +249,7 @@ def _run_stream(
                 "error": result.error,
                 "status_code": result.status_code,
                 "started_at": result.started_at,
+                "content_mode": content_mode,
             }
         )
         if result.receipt_path:
@@ -190,6 +275,7 @@ def _run_provider(
     bench_path: Optional[Path],
     prompt_sha256: str,
     stall_threshold_seconds: Optional[float],
+    content_mode: str,
 ) -> Tuple[bool, bool]:
     if not settings.enabled:
         return True, had_output
@@ -212,16 +298,14 @@ def _run_provider(
                     label = f"{settings.name} ({model}) run {run_number}/{bench_runs}"
                 bench_record = None
                 if bench_path is not None:
-                    bench_record = {
-                        "type": "run",
-                        "provider": settings.name,
-                        "model": model,
-                        "api_url": settings.api_url,
-                        "prompt_sha256": prompt_sha256,
-                        "warmup": is_warmup,
-                        "run_index": run_index + 1,
-                        "run_total": total_runs,
-                    }
+                    bench_record = _build_bench_record(
+                        settings,
+                        model,
+                        prompt_sha256,
+                        is_warmup,
+                        run_index + 1,
+                        total_runs,
+                    )
                 if not _run_stream(
                     label,
                     settings.api_url,
@@ -234,10 +318,9 @@ def _run_provider(
                     bench_path=bench_path,
                     bench_record=bench_record,
                     stall_threshold_seconds=stall_threshold_seconds,
+                    content_mode=content_mode,
                 ):
                     had_output = True
-                    if not bench_enabled:
-                        return False, had_output
                     continue
                 had_output = True
         else:
@@ -245,16 +328,14 @@ def _run_provider(
                 print("")
             bench_record = None
             if bench_path is not None:
-                bench_record = {
-                    "type": "run",
-                    "provider": settings.name,
-                    "model": model,
-                    "api_url": settings.api_url,
-                    "prompt_sha256": prompt_sha256,
-                    "warmup": False,
-                    "run_index": 1,
-                    "run_total": 1,
-                }
+                bench_record = _build_bench_record(
+                    settings,
+                    model,
+                    prompt_sha256,
+                    False,
+                    1,
+                    1,
+                )
             if not _run_stream(
                 f"{settings.name} ({model})",
                 settings.api_url,
@@ -267,6 +348,7 @@ def _run_provider(
                 bench_path=bench_path,
                 bench_record=bench_record,
                 stall_threshold_seconds=stall_threshold_seconds,
+                content_mode=content_mode,
             ):
                 return False, had_output
             had_output = True
@@ -280,6 +362,7 @@ def run() -> None:
         return
 
     request_params = _load_request_params()
+    content_mode = _load_content_mode()
     bench_enabled, bench_warmup, bench_runs = _bench_settings()
     bench_path = None
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -292,18 +375,14 @@ def run() -> None:
             stall_threshold_ms = 2000
         stall_threshold_seconds = stall_threshold_ms / 1000.0
         if bench_path is not None:
-            meta = {
-                "type": "meta",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "bench": {
-                    "warmup": bench_warmup,
-                    "runs": bench_runs,
-                    "stall_threshold_ms": stall_threshold_ms,
-                },
-                "prompt_sha256": prompt_sha256,
-                "prompt_file": os.getenv("AMBIENT_PROMPT_FILE", "").strip() or None,
-                "request_params": request_params,
-            }
+            meta = _build_bench_meta(
+                bench_warmup,
+                bench_runs,
+                stall_threshold_ms,
+                prompt_sha256,
+                request_params,
+                content_mode,
+            )
             _append_bench_record(bench_path, meta)
             print(f"Bench output: {bench_path}")
     had_output = False
@@ -323,6 +402,7 @@ def run() -> None:
             bench_path,
             prompt_sha256,
             stall_threshold_seconds,
+            content_mode,
         )
         if not success:
             return
