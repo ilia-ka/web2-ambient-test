@@ -93,6 +93,12 @@ def _summarize(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
         output_chars = [
             float(item["output_chars"]) for item in success_runs if item.get("output_chars") is not None
         ]
+        content_chars = [
+            float(item["content_chars"]) for item in success_runs if item.get("content_chars") is not None
+        ]
+        reasoning_chars = [
+            float(item["reasoning_chars"]) for item in success_runs if item.get("reasoning_chars") is not None
+        ]
         usage_tokens = []
         for item in success_runs:
             total_tokens = _usage_total(item.get("usage"))
@@ -105,6 +111,7 @@ def _summarize(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "model": model,
                 "runs_total": total_runs,
                 "runs_success": success_count,
+                "success_rate": success_count / total_runs if total_runs else 0.0,
                 "ttfb_ms_p50": _percentile(ttfb_ms, 0.5),
                 "ttfb_ms_p90": _percentile(ttfb_ms, 0.9),
                 "ttc_ms_p50": _percentile(ttc_ms, 0.5),
@@ -112,6 +119,8 @@ def _summarize(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "stall_count_avg": sum(stall_counts) / len(stall_counts) if stall_counts else None,
                 "stall_gap_ms_p90": _percentile(stall_gaps, 0.9),
                 "output_chars_p50": _percentile(output_chars, 0.5),
+                "content_chars_p50": _percentile(content_chars, 0.5),
+                "reasoning_chars_p50": _percentile(reasoning_chars, 0.5),
                 "usage_tokens_p50": _percentile(usage_tokens, 0.5),
                 "usage_tokens_coverage": f"{len(usage_tokens)}/{success_count}"
                 if success_count
@@ -121,7 +130,7 @@ def _summarize(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
     return summaries
 
 
-def _render_markdown(summaries: List[Dict[str, object]]) -> str:
+def _render_markdown(summaries: List[Dict[str, object]], include_content: bool) -> str:
     headers = [
         "Provider",
         "Model",
@@ -134,6 +143,8 @@ def _render_markdown(summaries: List[Dict[str, object]]) -> str:
         "Output chars p50",
         "Tokens p50",
     ]
+    if include_content:
+        headers.extend(["Content chars p50", "Reasoning chars p50"])
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
     for row in summaries:
         ttfb = f"{_format_pair(row['ttfb_ms_p50'])}/{_format_pair(row['ttfb_ms_p90'])}"
@@ -141,31 +152,88 @@ def _render_markdown(summaries: List[Dict[str, object]]) -> str:
         usage_extra = None
         if row.get("usage_tokens_p50") is not None and row.get("usage_tokens_coverage"):
             usage_extra = row["usage_tokens_coverage"]
-        lines.append(
-            "| "
-            + " | ".join(
+        cells = [
+            row["provider"],
+            row["model"],
+            str(row["runs_total"]),
+            _format_rate(row["runs_success"], row["runs_total"]),
+            ttfb,
+            ttc,
+            _format_value(row["stall_count_avg"]),
+            _format_pair(row["stall_gap_ms_p90"]),
+            _format_pair(row["output_chars_p50"]),
+            _format_value(row["usage_tokens_p50"], usage_extra),
+        ]
+        if include_content:
+            cells.extend(
                 [
-                    row["provider"],
-                    row["model"],
-                    str(row["runs_total"]),
-                    _format_rate(row["runs_success"], row["runs_total"]),
-                    ttfb,
-                    ttc,
-                    _format_value(row["stall_count_avg"]),
-                    _format_pair(row["stall_gap_ms_p90"]),
-                    _format_pair(row["output_chars_p50"]),
-                    _format_value(row["usage_tokens_p50"], usage_extra),
+                    _format_pair(row["content_chars_p50"]),
+                    _format_pair(row["reasoning_chars_p50"]),
                 ]
             )
-            + " |"
+        lines.append(
+            "| " + " | ".join(cells) + " |"
         )
     return "\n".join(lines)
+
+
+def _sort_summaries(
+    summaries: List[Dict[str, object]],
+    sort_by: str,
+    descending: bool,
+) -> List[Dict[str, object]]:
+    sort_by = sort_by.strip().lower()
+    if sort_by in ("provider", "model"):
+        return sorted(
+            summaries,
+            key=lambda row: (row.get(sort_by, "") or "").lower(),
+            reverse=descending,
+        )
+
+    field_map = {
+        "success_rate": "success_rate",
+        "ttfb_p50": "ttfb_ms_p50",
+        "ttfb_p90": "ttfb_ms_p90",
+        "ttc_p50": "ttc_ms_p50",
+        "ttc_p90": "ttc_ms_p90",
+        "stall_avg": "stall_count_avg",
+        "stall_p90": "stall_gap_ms_p90",
+        "output_p50": "output_chars_p50",
+        "tokens_p50": "usage_tokens_p50",
+        "content_p50": "content_chars_p50",
+        "reasoning_p50": "reasoning_chars_p50",
+    }
+    field = field_map.get(sort_by, "ttc_ms_p50")
+
+    def numeric_key(row: Dict[str, object]) -> Tuple[int, float]:
+        value = row.get(field)
+        if value is None:
+            return (1, 0.0)
+        numeric = float(value)
+        return (0, -numeric if descending else numeric)
+
+    return sorted(summaries, key=numeric_key)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize bench_*.jsonl results.")
     parser.add_argument("paths", nargs="+", help="Bench JSONL file(s) or a directory.")
     parser.add_argument("--include-warmup", action="store_true", help="Include warmup runs.")
+    parser.add_argument(
+        "--include-content",
+        action="store_true",
+        help="Include content/reasoning character columns.",
+    )
+    parser.add_argument(
+        "--sort",
+        default="provider",
+        help=(
+            "Sort by: provider, model, success_rate, ttfb_p50, ttfb_p90, "
+            "ttc_p50, ttc_p90, stall_avg, stall_p90, output_p50, tokens_p50, "
+            "content_p50, reasoning_p50."
+        ),
+    )
+    parser.add_argument("--desc", action="store_true", help="Sort descending.")
     parser.add_argument(
         "--format",
         choices=["markdown", "json"],
@@ -194,10 +262,11 @@ def main() -> int:
             records.append(record)
 
     summaries = _summarize(records)
+    summaries = _sort_summaries(summaries, args.sort, args.desc)
     if args.format == "json":
         print(json.dumps({"summaries": summaries}, indent=2))
         return 0
-    print(_render_markdown(summaries))
+    print(_render_markdown(summaries, args.include_content))
     return 0
 
 

@@ -19,6 +19,7 @@ from .provider_utils import ProviderSettings
 class EnvConfig:
     request_params: Dict[str, object]
     content_mode: str
+    on_error: str
     bench_enabled: bool
     bench_warmup: int
     bench_runs: int
@@ -48,6 +49,11 @@ ALLOWED_CONTENT_MODES = {
     "content",
     "reasoning",
     "content_or_reasoning",
+}
+
+ALLOWED_ON_ERROR = {
+    "abort",
+    "continue",
 }
 
 
@@ -149,6 +155,20 @@ def _load_content_mode() -> str:
     return raw
 
 
+def _load_on_error(bench_enabled: bool) -> str:
+    raw = os.getenv("RUN_ON_ERROR", "").strip().lower()
+    default = "continue" if bench_enabled else "abort"
+    if not raw:
+        return default
+    if raw not in ALLOWED_ON_ERROR:
+        print(
+            "Warning: RUN_ON_ERROR must be one of "
+            f"{', '.join(sorted(ALLOWED_ON_ERROR))}; using {default}."
+        )
+        return default
+    return raw
+
+
 def _bench_settings() -> Tuple[bool, int, int]:
     enabled = is_enabled(os.getenv("BENCH_ENABLED"), default=False)
     if not enabled:
@@ -198,6 +218,7 @@ def _build_bench_meta(
     prompt_sha256: str,
     request_params: Dict[str, object],
     content_mode: str,
+    on_error: str,
 ) -> Dict[str, object]:
     return {
         "type": "meta",
@@ -211,6 +232,7 @@ def _build_bench_meta(
         "prompt_file": os.getenv("AMBIENT_PROMPT_FILE", "").strip() or None,
         "request_params": request_params,
         "content_mode": content_mode,
+        "on_error": on_error,
     }
 
 
@@ -355,7 +377,7 @@ def _run_provider(
                 content_mode=config.content_mode,
             ):
                 had_output = True
-                if config.bench_enabled:
+                if config.on_error == "continue":
                     continue
                 return False, had_output
             had_output = True
@@ -364,8 +386,9 @@ def _run_provider(
 
 def _load_env_config(prompt: str) -> EnvConfig:
     request_params = _load_request_params()
-    content_mode = _load_content_mode()
     bench_enabled, bench_warmup, bench_runs = _bench_settings()
+    content_mode = _load_content_mode()
+    on_error = _load_on_error(bench_enabled)
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     bench_recorder: Optional[BenchRecorder] = None
     stall_threshold_seconds = None
@@ -385,12 +408,14 @@ def _load_env_config(prompt: str) -> EnvConfig:
                 prompt_sha256,
                 request_params,
                 content_mode,
+                on_error,
             )
             bench_recorder.write(meta)
             print(f"Bench output: {bench_path}")
     return EnvConfig(
         request_params=request_params,
         content_mode=content_mode,
+        on_error=on_error,
         bench_enabled=bench_enabled,
         bench_warmup=bench_warmup,
         bench_runs=bench_runs,
