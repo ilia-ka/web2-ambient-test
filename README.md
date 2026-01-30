@@ -23,9 +23,23 @@
   - Stall detection: `BENCH_STALL_THRESHOLD_MS` (default 2000 ms).
   - Shared request params: `REQUEST_TEMPERATURE`, `REQUEST_MAX_TOKENS`, `REQUEST_TOP_P`, `REQUEST_SEED`, `REQUEST_STOP`.
   - Usage in stream (if supported): `REQUEST_STREAM_INCLUDE_USAGE=1`.
+- Config reference (key -> meaning -> default):
+  - `BENCH_WARMUP`: warmup runs excluded from summary -> `1`
+  - `BENCH_RUNS`: measured runs per model -> `3`
+  - `BENCH_STALL_THRESHOLD_MS`: gap to count a stall -> `2000`
+  - `REQUEST_TEMPERATURE`: sampling temperature -> unset
+  - `REQUEST_MAX_TOKENS`: output cap -> unset
+  - `REQUEST_TOP_P`: nucleus sampling -> unset
+  - `REQUEST_SEED`: deterministic seed (if supported) -> unset
+  - `REQUEST_STOP`: stop sequences -> unset
+  - `REQUEST_STREAM_INCLUDE_USAGE`: stream usage if supported -> `0`
+  - `REQUEST_CONTENT_MODE`: `content`, `reasoning`, or `content_or_reasoning` -> `content_or_reasoning`
+  - `RUN_ON_ERROR`: `abort` or `continue` (default: abort; bench defaults to continue) -> unset
 - Report:
   - Generate markdown summary: `python .\report_bench.py data\bench_<timestamp>.jsonl`
   - Or point to a directory: `python .\report_bench.py data`
+  - Sort by slowest TTC: `python .\report_bench.py data --sort ttc_p50 --desc`
+  - Include content/reasoning columns: `python .\report_bench.py data --include-content`
 
 ### Week 4 Results (2026-01-29)
 Bench + cost summary (latency from data/bench_20260129_142659.jsonl; OpenRouter spend from dashboard, 2 runs today):
