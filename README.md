@@ -1,5 +1,30 @@
 # Web2 Weekly Challenges — Ambient
 
+## Web2 Developer Loop — Micro-Challenge #5 (Activation - Verification Boundaries)
+- Status: in progress.
+- Goal: programmatically split one Ambient response into:
+  - deterministic/verifiable parts (math, logic, explicit computation),
+  - interpretive/non-verifiable parts (advice, summary, subjective explanation).
+- Script: `split_layers.py`
+- Default prompt pattern: deterministic task + interpretive question in one request.
+- Run:
+  - `python .\split_layers.py`
+  - `python .\split_layers.py --show-response`
+  - `python .\split_layers.py --prompt "Compute 125 * 48. Then explain why diversification matters in financial portfolios."`
+- Optional params:
+  - `--model` to override `AMBIENT_MODEL`
+  - `--temperature` (default `0.0`)
+  - `--max-tokens` (default `256`)
+- Detection approach (simple heuristics, no ML training):
+  - split output into sentence-like chunks;
+  - score each chunk with regex/keyword signals;
+  - deterministic signals: numbers, operators, equations (`=`, `+`, `*`, etc.), logic markers (`if/then`, `implies`);
+  - interpretive signals: recommendation/subjective language (`should`, `consider`, `important`, `strategy`, etc.);
+  - if scores tie, numeric/operator-heavy chunks are labeled deterministic, otherwise interpretive.
+- Output labels:
+  - `DETERMINISTIC COMPONENTS`
+  - `INTERPRETIVE COMPONENTS`
+
 ## Configuration
 - Install dependency: `python -m pip install requests`
 - Set `AMBIENT_API_URL` and `AMBIENT_API_KEY` for Ambient (toggle with `AMBIENT_ENABLED`).
