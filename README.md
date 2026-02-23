@@ -1,6 +1,28 @@
-# Web2 Weekly Challenges — Ambient
+# Web2 Weekly Challenges - Ambient
 
-## Web2 Developer Loop — Micro-Challenge #5 (Activation - Verification Boundaries)
+## Web2 Developer Loop - Micro-Challenge #6 (Refusal Is a Feature)
+- Status: in progress.
+- Goal: detect refusal states from Ambient responses and route them safely.
+- Script: `detect_refusal.py`
+- Run:
+  - `python .\detect_refusal.py`
+  - `python .\detect_refusal.py --show-response`
+  - `python .\detect_refusal.py --prompt "I have 2 months of data and unknown liabilities. Should I invest all my savings right now?"`
+- Optional params:
+  - `--model` to override `AMBIENT_MODEL`
+  - `--temperature` (default `0.0`)
+  - `--max-tokens` (default `256`)
+  - `--review-file` path for refusal queue JSONL (default `data/human_review_queue.jsonl`)
+- Refusal detection (simple heuristics, no ML training):
+  - classify by phrase patterns and boundary signals in the model text;
+  - output state is one of:
+    - `ANSWERED`
+    - `REFUSED_INSUFFICIENT_DATA`
+    - `REFUSED_AMBIGUOUS`
+    - `REFUSED_UNCERTAIN`
+  - refusal cases are automatically escalated to human review by writing a JSONL record.
+
+## Web2 Developer Loop - Micro-Challenge #5 (Activation - Verification Boundaries)
 - Status: in progress.
 - Goal: programmatically split one Ambient response into:
   - deterministic/verifiable parts (math, logic, explicit computation),
